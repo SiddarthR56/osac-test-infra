@@ -17,6 +17,10 @@ class OsacCLI:
     def relogin(self) -> None:
         run(self.binary, "login", "--address", self._address, "--insecure", "--token-script", self._token_script)
 
+    def get_token(self) -> str:
+        self.relogin()
+        return run(self.binary, "get", "token")
+
     def create_hub(self, *, hub_id: str, kubeconfig: str) -> None:
         run(self.binary, "create", "hub", "--id", hub_id, "--kubeconfig", kubeconfig, "--namespace", self.namespace)
 

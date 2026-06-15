@@ -4,7 +4,6 @@ import pytest
 
 from tests.core.grpc_client import GRPCClient
 from tests.core.k8s_client import K8sClient
-from tests.core.keycloak import get_jwt
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import env, run
 
@@ -35,13 +34,10 @@ def service_account() -> str:
 
 
 @pytest.fixture(scope="session")
-def grpc(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+def grpc(fulfillment_address: str, cli: OsacCLI) -> GRPCClient:
     return GRPCClient(
         address=fulfillment_address,
-        token_factory=lambda: get_jwt(
-            keycloak_url=keycloak_url, realm="osac", client_id="osac-cli",
-            username="tenant1_admin", password=jwt_password,
-        ),
+        token_factory=cli.get_token,
     )
 
 
@@ -119,22 +115,36 @@ def jwt_cli_admin(namespace: str, fulfillment_address: str, keycloak_url: str, j
 
 
 @pytest.fixture(scope="session")
-def jwt_grpc_tenant1(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
-    return GRPCClient(
-        address=fulfillment_address,
-        token_factory=lambda: get_jwt(
-            keycloak_url=keycloak_url, realm="osac", client_id="osac-cli",
-            username="tenant1_user", password=jwt_password,
-        ),
+def cli_tenant1_user(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> OsacCLI:
+    return OsacCLI(
+        binary=env("OSAC_CLI_PATH", "osac"),
+        address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
+        token_script=_make_jwt_token_script(keycloak_url, "tenant1_user", jwt_password),
+        namespace=namespace,
     )
 
 
 @pytest.fixture(scope="session")
-def jwt_grpc_tenant2(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+def cli_tenant2_user(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> OsacCLI:
+    return OsacCLI(
+        binary=env("OSAC_CLI_PATH", "osac"),
+        address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
+        token_script=_make_jwt_token_script(keycloak_url, "tenant2_user", jwt_password),
+        namespace=namespace,
+    )
+
+
+@pytest.fixture(scope="session")
+def jwt_grpc_tenant1(fulfillment_address: str, cli_tenant1_user: OsacCLI) -> GRPCClient:
     return GRPCClient(
         address=fulfillment_address,
-        token_factory=lambda: get_jwt(
-            keycloak_url=keycloak_url, realm="osac", client_id="osac-cli",
-            username="tenant2_user", password=jwt_password,
-        ),
+        token_factory=cli_tenant1_user.get_token,
+    )
+
+
+@pytest.fixture(scope="session")
+def jwt_grpc_tenant2(fulfillment_address: str, cli_tenant2_user: OsacCLI) -> GRPCClient:
+    return GRPCClient(
+        address=fulfillment_address,
+        token_factory=cli_tenant2_user.get_token,
     )
