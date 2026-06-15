@@ -41,10 +41,10 @@ def pool_status(private_grpc: GRPCClient, pool_id: str) -> dict[str, Any]:
 
 
 def create_ip(
-    grpc: GRPCClient, k8s: K8sClient, pool_id: str
+    grpc: GRPCClient, k8s: K8sClient, pool: str
 ) -> tuple[str, str]:
     ip_name: str = f"test-ip-{uuid4().hex[:8]}"
-    ip_id: str = grpc.create_public_ip(name=ip_name, pool=pool_id)
+    ip_id: str = grpc.create_public_ip(name=ip_name, pool=pool)
     ip_cr_name: str = wait_for_public_ip_cr(k8s=k8s, uuid=ip_id)
     wait_for_public_ip_allocated(k8s=k8s, name=ip_cr_name)
     return ip_id, ip_cr_name

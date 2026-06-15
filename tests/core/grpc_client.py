@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import subprocess
+import time
+from collections.abc import Callable
 from typing import Any
 
 from tests.core.runner import run
@@ -10,14 +13,34 @@ from tests.core.runner import run
 PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
 
+_TOKEN_REFRESH_MARGIN_SECONDS: int = 30
+
+
+def _jwt_exp(token: str) -> float:
+    """Extract the ``exp`` claim from a JWT without verifying the signature."""
+    payload = token.split(".")[1]
+    # Pad base64url to a multiple of 4
+    padded = payload + "=" * (-len(payload) % 4)
+    claims: dict[str, Any] = json.loads(base64.urlsafe_b64decode(padded))
+    return float(claims["exp"])
+
 
 class GRPCClient:
-    def __init__(self, *, address: str, token: str) -> None:
+    def __init__(self, *, address: str, token_factory: Callable[[], str]) -> None:
         self.address: str = address
-        self.token: str = token
+        self._token_factory: Callable[[], str] = token_factory
+        self._cached_token: str | None = None
+        self._token_exp: float = 0.0
+
+    @property
+    def _token(self) -> str:
+        if self._cached_token is None or time.time() >= self._token_exp - _TOKEN_REFRESH_MARGIN_SECONDS:
+            self._cached_token = self._token_factory()
+            self._token_exp = _jwt_exp(self._cached_token)
+        return self._cached_token
 
     def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
-        args: list[str] = ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {self.token}"]
+        args: list[str] = ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {self._token}"]
         if data is not None:
             args.extend(["-d", json.dumps(data)])
         args.extend([self.address, service])
