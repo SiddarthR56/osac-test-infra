@@ -25,6 +25,8 @@ log_level = "INFO"
 # to distribute across 4 xdist workers) would otherwise show nothing in a CI
 # log until the whole run completes.
 log_cli = true
+log_cli_date_format = "%Y-%m-%dT%H:%M:%S%z"
+log_cli_format = "%(asctime)s %(levelname)-8s %(message)s"
 log_cli_level = "INFO"
 
 [tool.basedpyright]
