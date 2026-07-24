@@ -92,6 +92,12 @@ echo "Collecting compute instance status..."
 oc get computeinstances -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/computeinstances.txt" 2>&1 || true
 oc get computeinstances -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/computeinstances.yaml" 2>&1 || true
 
+echo "Collecting cluster order status..."
+oc get clusterorders -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/clusterorders.txt" 2>&1 || true
+oc get clusterorders -n "${E2E_NAMESPACE}" -o json 2>&1 \
+    | jq 'del(.items[]?.spec.templateParameters)' \
+    > "${ARTIFACT_DIR}/clusterorders.json" || true
+
 echo "Collecting networking status..."
 oc get virtualnetworks -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/virtualnetworks.txt" 2>&1 || true
 oc get virtualnetworks -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/virtualnetworks.yaml" 2>&1 || true
