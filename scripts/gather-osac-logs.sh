@@ -94,7 +94,7 @@ oc get computeinstances -n "${E2E_NAMESPACE}" -o yaml > "${ARTIFACT_DIR}/compute
 
 echo "Collecting cluster order status..."
 oc get clusterorders -n "${E2E_NAMESPACE}" -o wide > "${ARTIFACT_DIR}/clusterorders.txt" 2>&1 || true
-oc get clusterorders -n "${E2E_NAMESPACE}" -o json 2>&1 \
+oc get clusterorders -n "${E2E_NAMESPACE}" -o json 2>"${ARTIFACT_DIR}/clusterorders-errors.txt" \
     | jq 'del(.items[]?.spec.templateParameters)' \
     > "${ARTIFACT_DIR}/clusterorders.json" || true
 
