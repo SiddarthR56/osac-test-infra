@@ -304,6 +304,16 @@ jobs:
             echo "OSAC_CLI_BIN=$RUNNER_TEMP/osac-cli-bin" >> "$GITHUB_ENV"
           fi
 
+          # Save CRDs from the component source so they can be applied after
+          # OSAC install. Without this, CRDs come from osac-installer's
+          # submodule pin and miss any CRD changes in the PR.
+          if [[ -d "${SRC}/config/crd/bases" ]]; then
+            echo "Saving component CRDs from config/crd/bases/..."
+            mkdir -p "$RUNNER_TEMP/component-crds"
+            cp "${SRC}"/config/crd/bases/*.yaml "$RUNNER_TEMP/component-crds/"
+            echo "COMPONENT_CRDS_DIR=$RUNNER_TEMP/component-crds" >> "$GITHUB_ENV"
+          fi
+
           NODE_NAME=$(oc get nodes -o jsonpath='{.items[0].metadata.name}')
 
           echo "Loading image onto node ${NODE_NAME}..."
@@ -471,6 +481,16 @@ jobs:
                     --arg uk "aap.configAsCode.projectGitUri" --arg uv "${AAP_GIT_URI}" \
                     '. + {($bk): $bv, ($uk): $uv}')
             echo "AAP project override: branch=${COMPONENT_REF_NAME} uri=${AAP_GIT_URI}"
+          fi
+
+          # --- Apply component CRDs ---
+          # If the component source contained CRDs (e.g. osac-operator PR
+          # changing CRD structure), apply them now so the cluster has the
+          # CRD definitions matching the new operator binary.
+          if [[ -n "${COMPONENT_CRDS_DIR:-}" ]] && [[ -d "${COMPONENT_CRDS_DIR}" ]]; then
+            echo "Applying component CRDs from PR..."
+            oc apply --server-side --force-conflicts -f "${COMPONENT_CRDS_DIR}/"
+            echo "Component CRDs applied."
           fi
 
           if [[ -n "${MERGED_OVERRIDES}" ]] && [[ "${MERGED_OVERRIDES}" != "{}" ]]; then
