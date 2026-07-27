@@ -56,6 +56,7 @@ osac-test-infra/
 │   ├── caas/           # ClusterOrder lifecycle, credentials, templates
 │   ├── storage/        # Tenant storage lifecycle
 │   ├── catalog/        # CatalogItem lifecycle
+│   ├── bmaas/          # BareMetalInstance lifecycle
 │   └── core/           # Client wrappers, helpers, runner primitives
 ├── Makefile            # Build targets: test, lint, format, test-<suite>, plus infra orchestration
 ├── Containerfile       # UBI9 + oc/kubectl/grpcurl/osac CLI
@@ -93,6 +94,7 @@ Place tests in the appropriate suite directory:
 - `tests/caas/` — ClusterOrder features
 - `tests/storage/` — Tenant storage
 - `tests/catalog/` — CatalogItem features
+- `tests/bmaas/` — BareMetalInstance features
 
 ### Naming Convention
 
@@ -438,10 +440,10 @@ kubectl -n $OSAC_NAMESPACE logs -l app=fulfillment-service --tail=100
 
 ### gRPC call returns "Unauthenticated"
 
-**Cause**: Expired or invalid token. Session-scoped `grpc`/`cli` fixtures request a token once per run, so a long test session can outlast the token's `1h` duration
+**Cause**: Expired or invalid token. Session-scoped `grpc`/`cli` fixtures request a token once per run, so a long test session can outlast the token's `4h` duration
 **Fix**: For manual/interactive debugging, mint a fresh token the same way the fixtures do:
 ```bash
-oc create token $OSAC_SERVICE_ACCOUNT -n $OSAC_NAMESPACE --duration 1h --as system:admin
+oc create token $OSAC_SERVICE_ACCOUNT -n $OSAC_NAMESPACE --duration 4h --as system:admin
 ```
 
 ### Test fails with "resource not found"
