@@ -235,6 +235,9 @@ fi
 
 if [[ -n "${JUNIT_PATH}" && -f "${JUNIT_PATH}" ]]; then
     cp "${JUNIT_PATH}" "${ARTIFACT_DIR}/junit.xml"
+fi
+
+if [[ -n "${JUNIT_PATH}" ]]; then
     E2E_LOG="$(dirname "${JUNIT_PATH}")/e2e.log"
     if [[ -f "${E2E_LOG}" ]]; then
         cp "${E2E_LOG}" "${ARTIFACT_DIR}/e2e.log"
