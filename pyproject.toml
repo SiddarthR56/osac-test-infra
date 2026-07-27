@@ -32,6 +32,9 @@ log_cli_level = "INFO"
 # Unlike log_cli, log_file works under xdist (-n 4) because workers forward
 # log records to the controller which writes them sequentially.
 # Path must match the container volume mount in .github/workflows/e2e-*.yml
+# Note for future maintainers:
+# Makefile writes output to ${REPORT_DIR}, e2e.log filepath is hardcoded.
+# TODO: CI test & Makefile create files in same directory with path retrieved from vars defined in files or environments.
 log_file = "/tmp/test-output/e2e.log"
 log_file_date_format = "%Y-%m-%dT%H:%M:%S%z"
 log_file_format = "%(asctime)s %(levelname)-8s %(name)s %(message)s"
