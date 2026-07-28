@@ -180,6 +180,56 @@ make destroy        # tear down everything
 make deploy-fast    # full redeploy (snapshot path)
 ```
 
+### Bare-Metal Lab Deployment (from laptop)
+
+For persistent bare-metal servers behind NAT (e.g., Red Hat lab infrastructure), use the remote deploy workflow. This handles image caching, bootstrapping, and resilient multi-step deploys from your laptop.
+
+**One-time setup:**
+```bash
+git clone --recurse-submodules https://github.com/osac-project/osac-test-infra.git
+cd osac-test-infra/infra/netris
+
+# Create env file from template (one per server, gitignored)
+cp scripts/env.sh.example scripts/env.sh
+# Edit scripts/env.sh with: SERVER IP, PASSWORD, LAB_NAME, secrets paths, AWS keys
+```
+
+**Deploy:**
+```bash
+source scripts/env.sh && make deploy-jump
+```
+
+This single command:
+1. Pre-caches container images on your laptop (with retries, avoids rate limits)
+2. Rsyncs the repo + cached images to the server
+3. Bootstraps packages (EPEL, Ansible, pip deps)
+4. Sets up data disk (partition, mount, symlinks, SELinux)
+5. Destroys any previous deployment
+6. Runs the full pipeline: setup → deploy-lab → deploy-ocp-snapshot → setup-caas → deploy-caas → post-install
+
+**Monitor:**
+```bash
+ssh root@$SERVER -t tmux attach -t deploy
+ssh root@$SERVER tail -f /root/deploy.log
+```
+
+**Multiple servers:** Create one env file per server (`scripts/env-mylab.sh`), then:
+```bash
+source scripts/env-mylab.sh && make deploy-jump
+```
+
+**BM-specific make targets (run on server):**
+
+| Target | Description |
+|--------|-------------|
+| `make redeploy-fresh` | Destroy + wipe progress + full fresh deploy |
+| `make disk-setup` | Auto-detect and mount data disk |
+| `make post-install` | Fix Keycloak/UI + generate access doc |
+| `make access-doc` | Generate handover documentation only |
+| `make health-check` | Quick status verification |
+
+See the PR description for known issues and workarounds specific to BM/RHEL environments.
+
 ## Accessing OCP Routes
 
 After `make deploy-osac`, a socat forwarder on port 9444 provides access to OCP routes (AAP UI, OCP console, fulfillment API) from external browsers. Port 443 is intercepted by K3s svclb (Netris controller), so 9444 is used instead.

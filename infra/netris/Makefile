@@ -6,7 +6,8 @@
        destroy destroy-osac destroy-ocp destroy-caas destroy-vmaas destroy-bmaas \
        connectivity prep-osac run-osac-setup post-osac vendor-update lint \
        gather gather-lab gather-caas \
-       cleanup-dns
+       cleanup-dns \
+       deploy-jump redeploy-fresh disk-setup access-doc post-install health-check
 
 EXTRA_VARS ?=
 ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)')
@@ -127,3 +128,27 @@ gather-caas:
 
 cleanup-dns:
 	ansible-playbook playbooks/cleanup-dns.yml $(ANSIBLE_EXTRA)
+
+# --- Operational tooling (BM lab management) ---
+
+redeploy-fresh:
+	@echo "=== Destroying all infrastructure ==="
+	-$(MAKE) destroy
+	rm -f /root/.deploy-progress
+	@echo "=== Starting fresh deploy ==="
+	scripts/redeploy-server.sh "$(EXTRA_VARS)"
+
+deploy-jump:
+	@scripts/deploy-jump.sh
+
+disk-setup:
+	ansible-playbook playbooks/disk-setup.yml $(ANSIBLE_EXTRA)
+
+access-doc:
+	ansible-playbook playbooks/access-doc.yml $(ANSIBLE_EXTRA)
+
+post-install:
+	ansible-playbook playbooks/post-install.yml $(ANSIBLE_EXTRA)
+
+health-check:
+	scripts/health-check.sh
