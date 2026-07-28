@@ -47,17 +47,43 @@ for f in "$PULL_SECRET" "$LICENSE_KEY" "$LICENSE_ZIP"; do
 done
 
 # --- SSH/SCP helpers ---
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
-if [[ -n "${PASSWORD:-}" ]]; then
-    SSH="sshpass -p '${PASSWORD}' ssh ${SSH_OPTS} root@${SERVER}"
-    SCP="sshpass -p '${PASSWORD}' scp ${SSH_OPTS}"
-else
-    SSH="ssh ${SSH_OPTS} root@${SERVER}"
-    SCP="scp ${SSH_OPTS}"
-fi
+SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=10)
 
-run_ssh() { eval "${SSH} \"$*\""; }
-run_scp() { eval "${SCP} $*"; }
+run_ssh() {
+    if [[ -n "${PASSWORD:-}" ]]; then
+        sshpass -p "${PASSWORD}" ssh "${SSH_OPTS[@]}" "root@${SERVER}" "$@"
+    else
+        ssh "${SSH_OPTS[@]}" "root@${SERVER}" "$@"
+    fi
+}
+
+run_scp() {
+    if [[ -n "${PASSWORD:-}" ]]; then
+        sshpass -p "${PASSWORD}" scp "${SSH_OPTS[@]}" "$@"
+    else
+        scp "${SSH_OPTS[@]}" "$@"
+    fi
+}
+
+run_rsync() {
+    if [[ -n "${PASSWORD:-}" ]]; then
+        sshpass -p "${PASSWORD}" rsync -az --delete \
+            -e "ssh ${SSH_OPTS[*]}" "$@"
+    else
+        rsync -az --delete \
+            -e "ssh ${SSH_OPTS[*]}" "$@"
+    fi
+}
+
+rsync_no_delete() {
+    if [[ -n "${PASSWORD:-}" ]]; then
+        sshpass -p "${PASSWORD}" rsync -az \
+            -e "ssh ${SSH_OPTS[*]}" "$@"
+    else
+        rsync -az \
+            -e "ssh ${SSH_OPTS[*]}" "$@"
+    fi
+}
 
 echo "=== [1/9] Pre-caching container images on jump server ==="
 "${REPO_ROOT}/infra/netris/scripts/cache-images.sh"
@@ -68,30 +94,19 @@ run_ssh "hostname && echo OK" || { echo "ERROR: Cannot SSH to ${SERVER}"; exit 1
 
 echo ""
 echo "=== [3/9] Copying secrets to server ==="
-run_scp "${PULL_SECRET} root@${SERVER}:/root/pull-secret"
-run_scp "${LICENSE_KEY} root@${SERVER}:/root/license.key"
-run_scp "${LICENSE_ZIP} root@${SERVER}:/root/license.zip"
+run_scp "${PULL_SECRET}" "root@${SERVER}:/root/pull-secret"
+run_scp "${LICENSE_KEY}" "root@${SERVER}:/root/license.key"
+run_scp "${LICENSE_ZIP}" "root@${SERVER}:/root/license.zip"
 echo "Secrets copied."
 
 echo ""
 echo "=== [4/9] Syncing repository to server ==="
-if [[ -n "${PASSWORD:-}" ]]; then
-    sshpass -p "${PASSWORD}" rsync -az --delete \
-        -e "ssh ${SSH_OPTS}" \
-        --exclude='.git' \
-        --exclude='config' \
-        --exclude='license.key' \
-        --exclude='license.zip' \
-        "${REPO_ROOT}/" "root@${SERVER}:/root/netris-test-infra/"
-else
-    rsync -az --delete \
-        -e "ssh ${SSH_OPTS}" \
-        --exclude='.git' \
-        --exclude='config' \
-        --exclude='license.key' \
-        --exclude='license.zip' \
-        "${REPO_ROOT}/" "root@${SERVER}:/root/netris-test-infra/"
-fi
+run_rsync \
+    --exclude='.git' \
+    --exclude='config' \
+    --exclude='license.key' \
+    --exclude='license.zip' \
+    "${REPO_ROOT}/" "root@${SERVER}:/root/netris-test-infra/"
 echo "Repository synced."
 
 echo ""
@@ -99,15 +114,7 @@ echo "=== [5/9] Syncing cached images to server ==="
 CACHE_DIR="${CACHE_DIR:-${HOME}/.cache/netris-lab/k3s-images}"
 if [[ -d "$CACHE_DIR" ]] && [[ "$(ls -A "$CACHE_DIR" 2>/dev/null)" ]]; then
     run_ssh "mkdir -p /var/cache/netris-lab/k3s-images"
-    if [[ -n "${PASSWORD:-}" ]]; then
-        sshpass -p "${PASSWORD}" rsync -az \
-            -e "ssh ${SSH_OPTS}" \
-            "${CACHE_DIR}/" "root@${SERVER}:/var/cache/netris-lab/k3s-images/"
-    else
-        rsync -az \
-            -e "ssh ${SSH_OPTS}" \
-            "${CACHE_DIR}/" "root@${SERVER}:/var/cache/netris-lab/k3s-images/"
-    fi
+    rsync_no_delete "${CACHE_DIR}/" "root@${SERVER}:/var/cache/netris-lab/k3s-images/"
     echo "Image cache synced ($(du -sh "$CACHE_DIR" | cut -f1))."
 else
     echo "No local image cache at ${CACHE_DIR}, server will pull from registries."

@@ -81,6 +81,10 @@
     - name: Wipe and create fresh partition table
       ansible.builtin.shell:
         cmd: |
+          existing=$(blkid {{ _data_disk | trim }} 2>/dev/null || true)
+          if [ -n "$existing" ]; then
+            echo "WARNING: wiping existing signatures on {{ _data_disk | trim }}: $existing"
+          fi
           wipefs -a {{ _data_disk | trim }}
           parted -s {{ _data_disk | trim }} mklabel gpt
           parted -s {{ _data_disk | trim }} mkpart primary xfs 0% 100%

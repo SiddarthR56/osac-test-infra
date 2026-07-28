@@ -33,6 +33,7 @@
       find / -path "*/data/*/kubeadmin-password" -type f 2>/dev/null | head -1 | xargs cat 2>/dev/null || echo ""
   register: _ocp_kubeadmin
   changed_when: false
+  no_log: true
 
 # ── CaaS Hosted Cluster ──
 
@@ -41,28 +42,32 @@
     cmd: |
       oc get hostedclusters -A -o json | python3 -c "
       import sys, json
-      data = json.load(sys.stdin)
-      items = data.get('items', [])
-      if items:
-          hc = items[0]
-          ns = hc['metadata']['namespace']
-          name = hc['metadata']['name']
-          ep = hc.get('status', {}).get('controlPlaneEndpoint', {})
-          api = ep.get('host', '') + ':' + str(ep.get('port', 6443))
-          print(f'{ns}|{name}|{api}')
-      else:
+      try:
+          data = json.load(sys.stdin)
+          items = data.get('items', [])
+          if items:
+              hc = items[0]
+              ns = hc['metadata']['namespace']
+              name = hc['metadata']['name']
+              ep = hc.get('status', {}).get('controlPlaneEndpoint', {})
+              api = ep.get('host', '') + ':' + str(ep.get('port', 6443))
+              print(f'{ns}|{name}|{api}')
+          else:
+              print('||')
+      except Exception:
           print('||')
       "
   environment:
     KUBECONFIG: /root/.kube/config
   register: _hc_info_raw
   changed_when: false
+  failed_when: false
 
 - name: Parse hosted cluster info
   ansible.builtin.set_fact:
-    _hc_namespace: "{{ _hc_info_raw.stdout.split('|')[0] }}"
-    _hc_name: "{{ _hc_info_raw.stdout.split('|')[1] }}"
-    _hc_api: "{{ _hc_info_raw.stdout.split('|')[2] }}"
+    _hc_namespace: "{{ (_hc_info_raw.stdout | default('||')).split('|')[0] | default('', true) }}"
+    _hc_name: "{{ (_hc_info_raw.stdout | default('||')).split('|')[1] | default('', true) }}"
+    _hc_api: "{{ (_hc_info_raw.stdout | default('||')).split('|')[2] | default('', true) }}"
 
 - name: Get CaaS kubeadmin password
   ansible.builtin.shell:
@@ -78,6 +83,7 @@
     KUBECONFIG: /root/.kube/config
   register: _caas_kubeadmin
   changed_when: false
+  no_log: true
 
 - name: Get CaaS console route
   ansible.builtin.shell:
@@ -120,6 +126,7 @@
   register: _aap_gateway_pass
   changed_when: false
   failed_when: false
+  no_log: true
 
 - name: Get AAP Controller admin password
   ansible.builtin.shell:
@@ -129,6 +136,7 @@
   register: _aap_controller_pass
   changed_when: false
   failed_when: false
+  no_log: true
 
 - name: Get AAP EDA admin password
   ansible.builtin.shell:
@@ -138,6 +146,7 @@
   register: _aap_eda_pass
   changed_when: false
   failed_when: false
+  no_log: true
 
 - name: Get Keycloak admin credentials
   ansible.builtin.shell:
@@ -155,11 +164,12 @@
   register: _keycloak_creds_raw
   changed_when: false
   failed_when: false
+  no_log: true
 
 - name: Parse Keycloak credentials
   ansible.builtin.set_fact:
-    _keycloak_user: "{{ _keycloak_creds_raw.stdout.split('|')[0] | default('admin', true) }}"
-    _keycloak_pass: "{{ _keycloak_creds_raw.stdout.split('|')[1] | default('admin', true) }}"
+    _keycloak_user: "{{ (_keycloak_creds_raw.stdout | default('|')).split('|')[0] | default('admin', true) }}"
+    _keycloak_pass: "{{ (_keycloak_creds_raw.stdout | default('|')).split('|')[1] | default('admin', true) }}"
 
 - name: Get fulfillment client credentials
   ansible.builtin.shell:
@@ -172,11 +182,12 @@
   register: _fulfillment_creds_raw
   changed_when: false
   failed_when: false
+  no_log: true
 
 - name: Parse fulfillment credentials
   ansible.builtin.set_fact:
-    _fulfillment_client_id: "{{ _fulfillment_creds_raw.stdout.split('|')[0] }}"
-    _fulfillment_client_secret: "{{ _fulfillment_creds_raw.stdout.split('|')[1] }}"
+    _fulfillment_client_id: "{{ (_fulfillment_creds_raw.stdout | default('|')).split('|')[0] | default('', true) }}"
+    _fulfillment_client_secret: "{{ (_fulfillment_creds_raw.stdout | default('|')).split('|')[1] | default('', true) }}"
 
 # ── Netris Controller ──
 
@@ -193,7 +204,7 @@
   ansible.builtin.template:
     src: access.md.j2
     dest: "{{ inventory_dir }}/../docs/{{ lab_name }}-access.md"
-    mode: "0644"
+    mode: "0600"
 
 - name: Display access doc path
   ansible.builtin.debug:
