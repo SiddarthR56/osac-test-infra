@@ -37,7 +37,7 @@ for step in "${STEPS[@]}"; do
     echo "========================================"
     echo ""
 
-    if make "$step" ${EXTRA_VARS:+EXTRA_VARS="$EXTRA_VARS"}; then
+    if make "$step" ${EXTRA_VARS:+EXTRA_VARS="${EXTRA_VARS}"}; then
         echo "$step" >> "$PROGRESS_FILE"
         echo "=== DONE $step ==="
     else

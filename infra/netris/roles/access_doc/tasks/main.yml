@@ -85,16 +85,6 @@
   changed_when: false
   no_log: true
 
-- name: Get CaaS console route
-  ansible.builtin.shell:
-    cmd: |
-      KUBECONFIG=/tmp/caas-kubeconfig.yaml oc get route console -n openshift-console -o jsonpath='{.spec.host}' 2>/dev/null || echo ""
-  environment:
-    KUBECONFIG: /root/.kube/config
-  register: _caas_console
-  changed_when: false
-  failed_when: false
-
 - name: Extract CaaS kubeconfig
   ansible.builtin.shell:
     cmd: |
@@ -104,6 +94,16 @@
   environment:
     KUBECONFIG: /root/.kube/config
   register: _caas_kubeconfig
+  changed_when: false
+  failed_when: false
+
+- name: Get CaaS console route
+  ansible.builtin.shell:
+    cmd: |
+      KUBECONFIG=/tmp/caas-kubeconfig.yaml oc get route console -n openshift-console -o jsonpath='{.spec.host}' 2>/dev/null || echo ""
+  environment:
+    KUBECONFIG: /root/.kube/config
+  register: _caas_console
   changed_when: false
   failed_when: false
 
