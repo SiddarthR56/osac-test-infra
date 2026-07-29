@@ -200,6 +200,12 @@
 
 # ── Render Template ──
 
+- name: Ensure docs directory exists
+  ansible.builtin.file:
+    path: "{{ inventory_dir }}/../docs"
+    state: directory
+    mode: "0755"
+
 - name: Render access document
   ansible.builtin.template:
     src: access.md.j2

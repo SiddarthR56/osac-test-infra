@@ -3,7 +3,7 @@
        run-snapshot-refresh post-snapshot-refresh \
        setup-caas deploy-caas \
        deploy-vmaas deploy-bmaas \
-       destroy destroy-osac destroy-ocp destroy-caas destroy-vmaas destroy-bmaas \
+       destroy destroy-full destroy-osac destroy-ocp destroy-caas destroy-vmaas destroy-bmaas \
        connectivity prep-osac run-osac-setup post-osac vendor-update lint \
        gather gather-lab gather-caas \
        cleanup-dns \
@@ -74,6 +74,8 @@ prep-snapshot-refresh:
 	ansible-playbook playbooks/prep-snapshot-refresh.yml $(ANSIBLE_EXTRA)
 
 run-snapshot-refresh:
+	@echo "=== Cleaning stale APIServices (prevent AAP reconciliation race) ==="
+	@oc get apiservice -o json | python3 -c "import sys,json; [print(i['metadata']['name']) for i in json.load(sys.stdin)['items'] for c in i.get('status',{}).get('conditions',[]) if c['type']=='Available' and c['status']=='False']" | xargs -r oc delete apiservice || true
 	@echo "=== Running OSAC refresh with live output ==="
 	cd /opt/osac-installer && \
 		KUBECONFIG=/root/.kube/config \
@@ -87,6 +89,9 @@ post-snapshot-refresh:
 # Destroy targets
 destroy:
 	ansible-playbook playbooks/destroy.yml $(ANSIBLE_EXTRA)
+
+destroy-full:
+	ansible-playbook playbooks/destroy-full.yml $(ANSIBLE_EXTRA)
 
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
@@ -133,7 +138,7 @@ cleanup-dns:
 
 redeploy-fresh:
 	@echo "=== Destroying all infrastructure ==="
-	-$(MAKE) destroy
+	-$(MAKE) destroy-full
 	rm -f /root/.deploy-progress
 	@echo "=== Starting fresh deploy ==="
 	scripts/redeploy-server.sh "$(EXTRA_VARS)"

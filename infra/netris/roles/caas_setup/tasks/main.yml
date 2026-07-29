@@ -184,6 +184,35 @@
   changed_when: false
   no_log: true
 
+- name: Wait for publish-templates job template to be available
+  ansible.builtin.uri:
+    url: "https://{{ _aap_route.stdout }}/api/controller/v2/job_templates/?name=osac-publish-templates"
+    method: GET
+    user: admin
+    password: "{{ _aap_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: _jt_check
+  until: _jt_check.status == 200 and (_jt_check.json.count | default(0)) > 0
+  retries: 40
+  delay: 15
+  no_log: true
+
+- name: Wait for AAP gateway to be fully ready
+  ansible.builtin.uri:
+    url: "https://{{ _aap_route.stdout }}/api/controller/v2/ping/"
+    method: GET
+    user: admin
+    password: "{{ _aap_admin_pw.stdout }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200]
+  register: _gw_ping
+  until: _gw_ping.status == 200
+  retries: 20
+  delay: 10
+  no_log: true
+
 - name: Launch publish-templates job
   ansible.builtin.uri:
     url: "https://{{ _aap_route.stdout }}/api/controller/v2/job_templates/osac-publish-templates/launch/"
@@ -194,6 +223,9 @@
     validate_certs: false
     status_code: [201]
   register: _publish_job
+  retries: 5
+  delay: 30
+  until: _publish_job.status == 201
 
 - name: Wait for publish-templates job to complete
   ansible.builtin.uri:
@@ -250,3 +282,44 @@
           editable: true
     validate_certs: false
     status_code: [200, 201, 409]
+
+# Step 6: Create CAPI provider RBAC in agent namespace
+# HyperShift requires this Role/RoleBinding to reconcile Agent-platform
+# HostedClusters. The `hypershift create cluster agent` CLI creates them,
+# but OSAC's programmatic flow skips that step. Confirmed required on
+# clean OS installs (not just stale state).
+- name: Create capi-provider-role Role in agent namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: capi-provider-role
+        namespace: "{{ caas_agent_namespace }}"
+      rules:
+        - apiGroups: ["agent-install.openshift.io"]
+          resources: ["agents"]
+          verbs: ["*"]
+  environment:
+    KUBECONFIG: /root/.kube/config
+
+- name: Create capi-provider-role RoleBinding in agent namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: capi-provider-role
+        namespace: "{{ caas_agent_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: capi-provider-role
+      subjects:
+        - kind: Group
+          name: system:serviceaccounts
+          apiGroup: rbac.authorization.k8s.io
+  environment:
+    KUBECONFIG: /root/.kube/config
