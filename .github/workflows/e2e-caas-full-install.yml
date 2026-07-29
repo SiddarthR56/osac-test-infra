@@ -416,24 +416,6 @@ jobs:
 
           make install-osac VALUES_FILE=values/caas-ci/values.yaml
 
-          # Configure CaaS domain
-          oc patch configmap cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" --type=merge \
-            -p "{\"data\":{
-                \"DNS_ZONE\":\"${CAAS_DOMAIN}\",
-                \"EXTERNAL_ACCESS_BASE_DOMAIN\":\"${CAAS_DOMAIN}\",
-                \"EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS\":\"${CAAS_DOMAIN}\",
-                \"HOSTED_CLUSTER_BASE_DOMAIN\":\"${CAAS_DOMAIN}\"
-            }}"
-
-          # Configure AWS credentials
-          oc get secret cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" >/dev/null 2>&1 || \
-              oc create secret generic cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}"
-          oc patch secret cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" --type=merge \
-            -p "{\"stringData\":{
-                \"AWS_ACCESS_KEY_ID\":\"${AWS_ACCESS_KEY_ID}\",
-                \"AWS_SECRET_ACCESS_KEY\":\"${AWS_SECRET_ACCESS_KEY}\"
-            }}"
-
           # Apply image overrides
           MERGED_OVERRIDES="${IMAGE_OVERRIDES}"
           if [[ -n "${COMPONENT_IMAGE:-}" ]] && [[ -n "${COMPONENT_IMAGE_KEY}" ]]; then
@@ -480,6 +462,24 @@ jobs:
               --timeout 10m \
               --wait
           fi
+
+          # Configure CaaS domain (after image overrides so helm upgrade cannot overwrite)
+          oc patch configmap cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" --type=merge \
+            -p "{\"data\":{
+                \"DNS_ZONE\":\"${CAAS_DOMAIN}\",
+                \"EXTERNAL_ACCESS_BASE_DOMAIN\":\"${CAAS_DOMAIN}\",
+                \"EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS\":\"${CAAS_DOMAIN}\",
+                \"HOSTED_CLUSTER_BASE_DOMAIN\":\"${CAAS_DOMAIN}\"
+            }}"
+
+          # Configure AWS credentials (after image overrides so helm upgrade cannot overwrite)
+          oc get secret cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" >/dev/null 2>&1 || \
+              oc create secret generic cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}"
+          oc patch secret cluster-fulfillment-ig -n "${INSTALLER_NAMESPACE}" --type=merge \
+            -p "{\"stringData\":{
+                \"AWS_ACCESS_KEY_ID\":\"${AWS_ACCESS_KEY_ID}\",
+                \"AWS_SECRET_ACCESS_KEY\":\"${AWS_SECRET_ACCESS_KEY}\"
+            }}"
 
       - name: Setup CaaS agent
         env:
