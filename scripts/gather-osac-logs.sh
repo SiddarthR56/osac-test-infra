@@ -238,9 +238,9 @@ if [[ -n "${JUNIT_PATH}" && -f "${JUNIT_PATH}" ]]; then
 fi
 
 if [[ -n "${JUNIT_PATH}" ]]; then
-    E2E_LOG="$(dirname "${JUNIT_PATH}")/e2e.log"
-    if [[ -f "${E2E_LOG}" ]]; then
-        cp "${E2E_LOG}" "${ARTIFACT_DIR}/e2e.log"
+    E2E_LOGS=("$(dirname "${JUNIT_PATH}")"/e2e*.log)
+    if [[ -e "${E2E_LOGS[0]}" ]]; then
+        sort -m -t' ' -k1,1 "${E2E_LOGS[@]}" > "${ARTIFACT_DIR}/e2e.log"
     fi
 fi
 
