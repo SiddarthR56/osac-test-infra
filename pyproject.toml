@@ -29,8 +29,8 @@ log_cli_date_format = "%Y-%m-%dT%H:%M:%S%z"
 log_cli_format = "%(asctime)s %(levelname)-8s %(message)s"
 log_cli_level = "INFO"
 # Write timestamped log records to a file that gets uploaded as an artifact.
-# Unlike log_cli, log_file works under xdist (-n 4) because workers forward
-# log records to the controller which writes them sequentially.
+# Unlike log_cli, log_file is not suppressed by xdist output capture.
+# Each worker writes its own file; the gather script merges them by timestamp.
 # Path must match the container volume mount in .github/workflows/e2e-*.yml
 # Note for future maintainers:
 # Makefile writes output to ${REPORT_DIR}, e2e.log filepath is hardcoded.
