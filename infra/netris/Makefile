@@ -7,7 +7,7 @@
        connectivity prep-osac run-osac-setup post-osac vendor-update lint \
        gather gather-lab gather-caas \
        cleanup-dns \
-       deploy-jump redeploy-fresh disk-setup access-doc post-install health-check
+       deploy-jump redeploy-fresh redeploy-continue disk-setup access-doc post-install health-check
 
 EXTRA_VARS ?=
 ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)')
@@ -139,9 +139,12 @@ cleanup-dns:
 redeploy-fresh:
 	@echo "=== Destroying all infrastructure ==="
 	-$(MAKE) destroy-full
-	rm -f /root/.deploy-progress
+	@sync
 	@echo "=== Starting fresh deploy ==="
-	scripts/redeploy-server.sh "$(EXTRA_VARS)"
+	scripts/redeploy-server.sh --fresh "$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
+
+redeploy-continue:
+	scripts/redeploy-server.sh "$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
 
 deploy-jump:
 	@scripts/deploy-jump.sh
