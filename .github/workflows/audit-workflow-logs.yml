@@ -6,10 +6,25 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
-      lookback-hours:
-        description: "Re-scan completed e2e runs created in the last N hours (enter 1-168; start-time based; default 27h gives 3h overlap on a 24h schedule)"
+      lookback:
+        description: "Lookback window for completed e2e runs (start-time based). Unit required: 27h, 1d, 30d, 90d (not a bare integer — that was hours in the old lookback-hours input). Max 90d. Default 27h gives 3h overlap on a 24h schedule."
         required: false
-        default: "27"
+        type: string
+        default: "27h"
+      target-repo:
+        description: "Repo to audit. 'all' covers every hardcoded known caller (same as the daily schedule)."
+        required: false
+        type: choice
+        default: all
+        # Must stay in sync with KNOWN_TARGET_REPOS in
+        # .github/scripts/discover-audit-runs.sh (both lists change together).
+        options:
+          - all
+          - osac-project/osac-test-infra
+          - osac-project/osac-aap
+          - osac-project/osac-installer
+          - osac-project/osac-operator
+          - osac-project/fulfillment-service
 
 concurrency:
   group: audit-workflow-logs
@@ -42,12 +57,12 @@ jobs:
     runs-on: osac-ci
     permissions:
       # Only needed to check out the shared scripts (scan-run-logs.sh,
-      # discover-e2e-runs.sh) this job invokes -- this job never pushes
+      # discover-audit-runs.sh) this job invokes -- this job never pushes
       # back to the repo.
       contents: read  # checkout only, no push
       # The tracking issue lives in this repo, so issues:write is enough at
       # the job-permissions level for that part. Cross-repo run listing and
-      # log fetch/delete use the org-scoped GH_ORG_TOKEN from Vault instead
+      # log fetch/delete use the Actions-scoped audit PAT from Vault instead
       # (see "Scan each run's logs" below), not this job's own token.
       issues: write  # create/update the credential-leak tracking issue
     steps:
@@ -75,17 +90,19 @@ jobs:
           secretId: ${{ steps.approle.outputs.secret-id }}
           exportEnv: false
           secrets: |
-            secret/data/osac/e2e/github-token token | GH_ORG_TOKEN ;
+            secret/data/osac/e2e/audit-log-cleaner-pat token | GH_ORG_TOKEN ;
             secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL
 
       - name: List recent e2e runs
         id: list
         env:
           GH_TOKEN: ${{ steps.vault.outputs.GH_ORG_TOKEN }}
-          LOOKBACK_HOURS: ${{ inputs.lookback-hours || '27' }}
+          # schedule: inputs are empty → 27h / all. workflow_dispatch uses the form values.
+          LOOKBACK: ${{ inputs.lookback || '27h' }}
+          TARGET_REPO: ${{ inputs.target-repo || 'all' }}
         run: |
           OUTPUT_DIR="${RUNNER_TEMP}/discover"
-          .github/scripts/discover-e2e-runs.sh "${LOOKBACK_HOURS}" "${OUTPUT_DIR}"
+          .github/scripts/discover-audit-runs.sh "${LOOKBACK}" "${OUTPUT_DIR}" "${TARGET_REPO}"
           # shellcheck disable=SC1091
           source "${OUTPUT_DIR}/status.env"
 
@@ -94,11 +111,13 @@ jobs:
           # can never show up as scan failures below -- tracked separately so
           # a partial audit still can't quietly report as a clean pass.
           echo "skipped-targets=${SKIPPED_TARGETS}" >> "$GITHUB_OUTPUT"
-          # Discovery failing outright is distinct from skipped-targets above
-          # (which stays 0 in that case, since the loop only ran over this
-          # repo's own baseline targets) -- surfaced separately so it isn't
-          # silently invisible to the summary/notify steps below.
-          echo "discovery-failed=${DISCOVERY_FAILED}" >> "$GITHUB_OUTPUT"
+          # Zero resolved targets must not look like a clean "no leaks" pass
+          # (empty runs.json + successful scan step).
+          echo "no-targets=${NO_TARGETS}" >> "$GITHUB_OUTPUT"
+          echo "runs-truncated=${RUNS_TRUNCATED:-false}" >> "$GITHUB_OUTPUT"
+          echo "lookback-raw=${LOOKBACK_RAW}" >> "$GITHUB_OUTPUT"
+          echo "lookback-hours=${LOOKBACK_HOURS}" >> "$GITHUB_OUTPUT"
+          echo "target-repo=${TARGET_REPO}" >> "$GITHUB_OUTPUT"
 
       - name: Scan each run's logs
         id: scan
@@ -131,10 +150,12 @@ jobs:
           # not `local` so updates here are visible after the loop.
           process_one_run() {
             local run_id="$1" repo="$2" output_dir="$3" slug="$4"
+            # Do not bail before sourcing status.env -- the script's EXIT trap
+            # can still record LEAKS_FOUND after a mid-run abort (e.g. after
+            # an artifact was already purged). Dropping that would hide a
+            # confirmed incident.
             if ! .github/scripts/scan-run-logs.sh "${run_id}" "${output_dir}" "${repo}"; then
-              echo "::warning::scan-run-logs.sh failed unexpectedly for run ${run_id} (${repo})"
-              SKIPPED_SCANS=$((SKIPPED_SCANS + 1))
-              return 0
+              echo "::warning::scan-run-logs.sh exited non-zero for run ${run_id} (${repo}) -- checking status.env for any findings recorded before abort."
             fi
             if [[ ! -f "${output_dir}/status.env" ]]; then
               echo "::warning::status.env missing after scan-run-logs.sh for run ${run_id} (${repo})"
@@ -144,12 +165,12 @@ jobs:
             # shellcheck disable=SC1091
             source "${output_dir}/status.env"
 
+            # Partial scans (SCAN_OK=false) can still find real leaks
+            # (e.g. log hit + oversize artifact skip). Always surface
+            # LEAKS_FOUND; also count the run as skipped so the audit
+            # cannot look fully clean.
             if [[ "${SCAN_OK}" != "true" ]]; then
-              # Could not even fetch this run's logs -- must not be silently
-              # folded into "no leaks found", or an auth/permission problem
-              # would look identical to a clean audit.
               SKIPPED_SCANS=$((SKIPPED_SCANS + 1))
-              return 0
             fi
             if [[ "${LEAKS_FOUND}" != "true" ]]; then
               return 0
@@ -158,9 +179,8 @@ jobs:
             FLAGGED=$((FLAGGED + 1))
             # A purge failure here means the exposure window for this run
             # is still open on GitHub -- tracked separately from
-            # SKIPPED_SCANS (which means "never checked") since this run
-            # *was* checked and *did* find something, it just couldn't
-            # close the loop.
+            # SKIPPED_SCANS (which means "never fully checked") since this
+            # run *did* find something, it just couldn't close the loop.
             [[ "${PURGE_OK}" != "true" ]] && PURGE_FAILURES=$((PURGE_FAILURES + 1))
             # cp and jq are independent of each other -- the redacted-copy
             # artifact vs. the tracking-issue summary entry -- so a failed
@@ -168,8 +188,13 @@ jobs:
             # under PROCESSING_FAILURES even if both happen to fail.
             local run_processing_failed=0
             mkdir -p "${ALL_REDACTED_DIR}/${slug}"
-            if ! cp -r "${output_dir}/redacted/." "${ALL_REDACTED_DIR}/${slug}/"; then
-              echo "::warning::Failed to copy redacted logs for run ${run_id} (${repo}) into the combined artifact -- leak was still detected and counted."
+            if [[ -d "${output_dir}/redacted" ]]; then
+              if ! cp -r "${output_dir}/redacted/." "${ALL_REDACTED_DIR}/${slug}/"; then
+                echo "::warning::Failed to copy redacted logs/artifacts for run ${run_id} (${repo}) into the combined artifact -- leak was still detected and counted."
+                run_processing_failed=1
+              fi
+            else
+              echo "::warning::No redacted/ dir for flagged run ${run_id} (${repo}) -- leak was still detected and counted."
               run_processing_failed=1
             fi
             if ! jq -c --arg run_id "${run_id}" --arg repo "${repo}" --arg count "${FINDINGS_COUNT}" --argjson purge_ok "${PURGE_OK}" \
@@ -265,7 +290,14 @@ jobs:
           SKIPPED_SCANS: ${{ steps.scan.outputs.skipped-scans || '0' }}
           PURGE_FAILURES: ${{ steps.scan.outputs.purge-failures || '0' }}
           PROCESSING_FAILURES: ${{ steps.scan.outputs.processing-failures || '0' }}
-          DISCOVERY_FAILED: ${{ steps.list.outputs.discovery-failed || 'false' }}
+          NO_TARGETS: ${{ steps.list.outputs.no-targets || 'false' }}
+          RUNS_TRUNCATED: ${{ steps.list.outputs.runs-truncated || 'false' }}
+          # Fall back to the dispatch inputs (empty on schedule => 27h/all) so a
+          # failed list step can't misreport the requested window/scope.
+          # LOOKBACK_HOURS stays empty when never computed -- don't invent 27.
+          LOOKBACK_RAW: ${{ steps.list.outputs.lookback-raw || inputs.lookback || '27h' }}
+          LOOKBACK_HOURS: ${{ steps.list.outputs.lookback-hours || '' }}
+          TARGET_REPO: ${{ steps.list.outputs.target-repo || inputs.target-repo || 'all' }}
           # 'skipped' (not just 'failure') when flagged-count is '0' -- the
           # upload step's own `if:` never runs it in that case. Only
           # meaningful when FLAGGED_COUNT != '0' below.
@@ -274,36 +306,47 @@ jobs:
         run: |
           SKIPPED_TOTAL=$((SKIPPED_TARGETS + SKIPPED_SCANS))
           {
-            echo "## Workflow log audit"
+            echo "## Workflow log/artifact audit"
+            echo ""
+            if [[ -n "${LOOKBACK_HOURS}" ]]; then
+              echo "- **Lookback:** \`${LOOKBACK_RAW}\` (${LOOKBACK_HOURS}h)"
+            else
+              echo "- **Lookback:** \`${LOOKBACK_RAW}\` (requested; never validated -- list step did not complete)"
+            fi
+            echo "- **Target repo:** \`${TARGET_REPO}\`"
             echo ""
             # "skipped" here means an earlier step (secrets bootstrap or run
-            # discovery) failed, so "Scan each run's logs" never ran at all --
+            # listing) failed, so "Scan each run's logs" never ran at all --
             # FLAGGED_COUNT/SKIPPED_TOTAL would misleadingly read all-zero in
             # that case (nothing to flag if nothing was scanned), so this must
             # be checked *before* falling back to the "no leaks" message.
+            # Same for NO_TARGETS: zero resolved workflows means we never
+            # checked anything -- not "checked, clean."
             if [[ "${SCAN_OUTCOME}" != "success" ]]; then
               echo ":x: Audit did not complete -- \"Scan each run's logs\" ended in **${SCAN_OUTCOME}** (likely an earlier step failed). Results below are incomplete, not a clean pass -- see job logs."
+            elif [[ "${NO_TARGETS}" == "true" ]]; then
+              echo ":x: No audit targets resolved for \`${TARGET_REPO}\` -- nothing was scanned. This is **not** a clean pass (check EXTERNAL_CALLERS / target-repo selection)."
             elif [[ "${FLAGGED_COUNT}" == "0" ]]; then
-              echo "No leaked credentials found in this audit window."
+              echo "No leaked credentials found in this audit window (logs + artifacts)."
             elif [[ "${UPLOAD_OUTCOME}" == "success" ]]; then
-              echo ":rotating_light: **${FLAGGED_COUNT}** run(s) had leaked credential(s) -- see the tracking issue and \`audit-redacted-logs-${RUN_ID}\` artifact."
+              echo ":rotating_light: **${FLAGGED_COUNT}** run(s) had leaked credential(s) in logs and/or artifacts -- see the tracking issue and \`audit-redacted-logs-${RUN_ID}\` artifact."
             else
               # Don't promise an artifact that isn't there -- the upload
               # step's own outcome (not just "did we try") tells us whether
               # it actually landed.
-              echo ":rotating_light: **${FLAGGED_COUNT}** run(s) had leaked credential(s) -- see the tracking issue. :warning: The \`audit-redacted-logs-${RUN_ID}\` artifact upload did not succeed (outcome: **${UPLOAD_OUTCOME}**) -- redacted copies are not available from this run."
+              echo ":rotating_light: **${FLAGGED_COUNT}** run(s) had leaked credential(s) in logs and/or artifacts -- see the tracking issue. :warning: The \`audit-redacted-logs-${RUN_ID}\` artifact upload did not succeed (outcome: **${UPLOAD_OUTCOME}**) -- redacted copies are not available from this run."
             fi
             if [[ "${SKIPPED_TOTAL}" != "0" ]]; then
               echo ""
               echo ":warning: **${SKIPPED_TOTAL}** target(s)/run(s) could not be listed or scanned this time (see \`::warning::\` annotations above) -- this audit is partial, not a clean pass."
             fi
-            if [[ "${DISCOVERY_FAILED}" == "true" ]]; then
+            if [[ "${RUNS_TRUNCATED}" == "true" ]]; then
               echo ""
-              echo ":warning: Cross-repo caller discovery failed -- only this repo's own workflows were audited this time, not the other known callers -- this audit is partial, not a clean pass."
+              echo ":warning: Aggregate run cap reached -- some in-window runs were not listed for scanning (partial audit, not a clean pass)."
             fi
             if [[ "${PURGE_FAILURES}" != "0" ]]; then
               echo ""
-              echo ":rotating_light: **${PURGE_FAILURES}** flagged run(s) could not have their raw logs deleted -- the exposure window is **NOT** closed for those runs (see the tracking issue's \"Purged\" column)."
+              echo ":rotating_light: **${PURGE_FAILURES}** flagged run(s) could not have their raw logs and/or tainted artifacts deleted -- the exposure window is **NOT** closed for those runs (see the tracking issue's \"Purged\" column)."
             fi
             if [[ "${PROCESSING_FAILURES}" != "0" ]]; then
               echo ""
@@ -312,11 +355,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "skipped-total=${SKIPPED_TOTAL}" >> "$GITHUB_OUTPUT"
 
-          NOTIFY_PARTS=()
+          NOTIFY_PARTS=("lookback=${LOOKBACK_RAW}" "target=${TARGET_REPO}")
           [[ "${SCAN_OUTCOME}" != "success" ]] && NOTIFY_PARTS+=("audit did not complete -- see job logs")
-          [[ "${FLAGGED_COUNT}" != "0" ]] && NOTIFY_PARTS+=("${FLAGGED_COUNT} run(s) with leaked credential(s)")
+          [[ "${NO_TARGETS}" == "true" ]] && NOTIFY_PARTS+=("no audit targets resolved (nothing scanned)")
+          [[ "${FLAGGED_COUNT}" != "0" ]] && NOTIFY_PARTS+=("${FLAGGED_COUNT} run(s) with leaked credential(s) in logs/artifacts")
           [[ "${SKIPPED_TOTAL}" != "0" ]] && NOTIFY_PARTS+=("${SKIPPED_TOTAL} target(s)/run(s) not scanned (partial audit)")
-          [[ "${DISCOVERY_FAILED}" == "true" ]] && NOTIFY_PARTS+=("cross-repo caller discovery failed (partial audit)")
+          [[ "${RUNS_TRUNCATED}" == "true" ]] && NOTIFY_PARTS+=("aggregate run cap reached (partial audit)")
           [[ "${PURGE_FAILURES}" != "0" ]] && NOTIFY_PARTS+=("${PURGE_FAILURES} run(s) with unclosed exposure window (purge failed)")
           [[ "${PROCESSING_FAILURES}" != "0" ]] && NOTIFY_PARTS+=("${PROCESSING_FAILURES} run(s) detected but not fully recorded")
           # "${arr[*]}" with IFS set only honors the *first* IFS character
@@ -353,7 +397,7 @@ jobs:
           echo "::group::Build findings body"
           BODY_FILE="${RUNNER_TEMP}/issue-body.md"
           {
-            echo "Automated audit found leaked credential(s) in **${FLAGGED_COUNT}** e2e workflow run(s)."
+            echo "Automated audit found leaked credential(s) in **${FLAGGED_COUNT}** e2e workflow run(s) (logs and/or artifacts)."
             echo ""
             if [[ "${UPLOAD_OUTCOME}" == "success" ]]; then
               echo "A redacted copy of each is in the"
@@ -362,8 +406,8 @@ jobs:
               echo ":warning: The \`audit-redacted-logs-${RUN_ID}\` artifact upload did not succeed (outcome: **${UPLOAD_OUTCOME}**) --"
               echo "redacted copies are not available from this run; see [the run logs](${RUN_URL}) instead."
             fi
-            echo "Raw logs were deleted for runs marked :white_check_mark: below -- for any marked :x:,"
-            echo "the exposure window is still open and the raw logs need to be deleted manually."
+            echo "Raw logs and tainted artifacts were deleted for runs marked :white_check_mark: below -- for any marked :x:,"
+            echo "the exposure window is still open and content needs to be deleted manually."
             echo ""
             echo "| Repo | Run | Findings | Rule(s) | Purged |"
             echo "|---|---|---|---|---|"
@@ -401,7 +445,7 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/issues" \
               -d "$(jq -n --rawfile body "${BODY_FILE}" \
-                '{title: "OSAC-1684: Leaked credentials detected in e2e workflow logs", body: $body, labels: ["credential-leak"]}')"
+                '{title: "OSAC-1684: Leaked credentials detected in e2e workflow logs/artifacts", body: $body, labels: ["credential-leak"]}')"
           fi
           echo "::endgroup::"
 
@@ -426,11 +470,11 @@ jobs:
         if: >
           always() &&
           steps.vault.outcome == 'success' &&
-          (steps.scan.outcome != 'success' || steps.summary.outcome != 'success' || steps.scan.outputs.flagged-count != '0' || steps.summary.outputs.skipped-total != '0' || steps.list.outputs.discovery-failed == 'true')
+          (steps.scan.outcome != 'success' || steps.summary.outcome != 'success' || steps.scan.outputs.flagged-count != '0' || steps.summary.outputs.skipped-total != '0' || steps.list.outputs.no-targets == 'true' || steps.list.outputs.runs-truncated == 'true')
         uses: ./.github/actions/notify-slack
         with:
           status: failure
-          workflow-name: "Workflow log audit"
+          workflow-name: "Workflow log/artifact audit"
           failed-step: "${{ steps.summary.outputs.notify-message || 'Audit incomplete -- see run logs' }}"
           slack-webhook-url: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
           workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
