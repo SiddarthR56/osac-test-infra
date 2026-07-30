@@ -416,15 +416,6 @@ jobs:
               options:
                 metal3:
                   namespace: ${BMH_NAMESPACE}
-          ---
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: osac-os-clouds
-            namespace: ${INSTALLER_NAMESPACE}
-          type: Opaque
-          stringData:
-            clouds.yaml: ""
           EOF
           echo "BMF secrets created."
 
