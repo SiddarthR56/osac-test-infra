@@ -1,10 +1,10 @@
 ---
 name: Scan and purge workflow run logs
 description: >-
-  Scan a single workflow run's logs for leaked credentials with gitleaks
-  (via scripts/scan-run-logs.sh). On a match: upload a redacted copy as an
-  artifact, warn on the job summary, and delete the raw logs to close the
-  exposure window (OSAC-1684).
+  Scan a single workflow run's logs and artifacts for leaked credentials with
+  gitleaks (via scripts/scan-run-logs.sh). On a match: upload a redacted copy
+  as an artifact, warn on the job summary, and delete the raw logs and/or
+  tainted artifacts to close the exposure window (OSAC-1684).
 
 inputs:
   run-id:
@@ -12,22 +12,25 @@ inputs:
     required: false
     default: ${{ github.run_id }}
   github-token:
-    description: "Token with actions:write on this repo (to fetch and delete run logs)"
+    description: "Token with actions:write on this repo (to fetch and delete run logs/artifacts)"
     required: true
 
 outputs:
   scan-ok:
-    description: "'false' if the scan did not complete (fetch failed, or a post-fetch step like unzip/podman/redact failed) -- do not treat this the same as a clean scan"
+    description: "'false' if the scan did not complete for logs and/or artifacts (fetch/list/download failed, oversize skip, or a post-fetch step like unzip/podman/redact failed) -- do not treat this the same as a clean scan"
     value: ${{ steps.scan.outputs.scan-ok }}
   leaks-found:
-    description: "'true' if gitleaks found any secrets in the run's logs"
+    description: "'true' if gitleaks found any secrets in the run's logs or artifacts"
     value: ${{ steps.scan.outputs.leaks-found }}
   purge-ok:
-    description: "'false' if raw logs may still be on GitHub -- either leaks were found but the delete call failed, or the scan failed after a successful fetch (never reached delete). 'true' with scan-ok='false' means the fetch itself failed (nothing was downloaded)"
+    description: "'false' if raw logs or tainted artifacts may still be on GitHub -- either leaks were found but a delete call failed, or the scan failed after a successful fetch (never reached delete). 'true' with scan-ok='false' means nothing was ever downloaded"
     value: ${{ steps.scan.outputs.purge-ok }}
   findings-count:
-    description: "Number of findings (0 if none)"
+    description: "Number of findings across logs and artifacts (0 if none)"
     value: ${{ steps.scan.outputs.findings-count }}
+  output-dir:
+    description: "Directory with findings.json / status.env / redacted/ (for callers that post summaries or PR comments)"
+    value: ${{ steps.scan.outputs.output-dir }}
 
 runs:
   using: composite
@@ -82,23 +85,27 @@ runs:
         PURGE_OK: ${{ steps.scan.outputs.purge-ok }}
       run: |
         {
-          echo "## :warning: Could not scan logs for leaked credentials"
+          echo "## :warning: Could not fully scan logs/artifacts for leaked credentials"
           echo ""
-          # purge-ok=true with scan-ok=false means the fetch itself failed
-          # (nothing downloaded). purge-ok=false means we got past fetch
-          # and then failed -- raw logs are still on GitHub.
+          # purge-ok=true with scan-ok=false means nothing was downloaded.
+          # purge-ok=false means we got past a fetch and then failed -- raw
+          # content may still be on GitHub.
           if [[ "${PURGE_OK}" == "true" ]]; then
-            echo "Failed to fetch logs for run [${RUN_ID}](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}) -- this is **not** the same as a clean scan; the logs were never actually checked."
+            echo "Failed to fetch logs and/or list/download artifacts for run [${RUN_ID}](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}) -- this is **not** the same as a clean scan; content was never fully checked."
           else
-            echo "Scan of run [${RUN_ID}](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}) failed after the logs were fetched (e.g. unzip/gitleaks/redact) -- this is **not** the same as a clean scan."
+            echo "Scan of run [${RUN_ID}](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}) failed after some content was fetched (e.g. unzip/gitleaks/redact, or an oversize artifact skip) -- this is **not** the same as a clean scan."
             echo ""
-            echo "- :warning: **Raw logs for this run may still be on GitHub** -- the scan never reached the delete/purge step. Check the run logs and delete manually if needed (\`gh api -X DELETE repos/${REPO}/actions/runs/${RUN_ID}/logs\`)."
+            echo "- :warning: **Raw logs and/or artifacts for this run may still be on GitHub** -- the scan never finished purge. Check the job logs and delete manually if needed:"
+            echo "  - Logs: \`gh api -X DELETE repos/${REPO}/actions/runs/${RUN_ID}/logs\`"
+            echo "  - Artifact: \`gh api -X DELETE repos/${REPO}/actions/artifacts/ARTIFACT_ID\`"
           fi
         } >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Upload redacted logs artifact
+    - name: Upload redacted evidence artifact
       id: upload
-      if: steps.scan.outputs.leaks-found == 'true'
+      # always(): a hard failure in an earlier composite step must not skip
+      # uploading evidence when leaks were already recorded.
+      if: always() && steps.scan.outputs.leaks-found == 'true'
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: redacted-logs-${{ inputs.run-id }}
@@ -125,25 +132,28 @@ runs:
         UPLOAD_OK: ${{ steps.upload.outcome == 'success' }}
       run: |
         {
-          echo "## :rotating_light: Leaked credential(s) detected in run logs"
+          echo "## :rotating_light: Leaked credential(s) detected in run logs/artifacts"
           echo ""
-          echo "gitleaks found **${FINDINGS_COUNT}** potential secret(s) in the logs for run [${RUN_ID}](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID})."
+          echo "gitleaks found **${FINDINGS_COUNT}** potential secret(s) in the logs and/or artifacts for run [${RUN_ID}](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID})."
           echo ""
-          # Never unconditionally claim the raw logs were deleted -- the
+          # Never unconditionally claim the raw content was deleted -- a
           # delete call itself can fail (permissions, API hiccup, etc.), in
           # which case the exposure window is still open and that must be
           # visible here, not just in a job-log ::warning:: that's easy to miss.
           if [[ "${PURGE_OK}" == "true" ]]; then
-            echo "- The raw logs for this run have been deleted to close the exposure window."
+            echo "- Tainted raw logs and/or artifacts for this run have been deleted to close the exposure window."
           else
-            echo "- :warning: **Failed to delete the raw logs for this run** -- the exposure window is **NOT** closed; the raw logs are still on GitHub. Delete them manually (\`gh api -X DELETE repos/${REPO}/actions/runs/${RUN_ID}/logs\`) or re-run this scan."
+            echo "- :warning: **Failed to delete some raw logs and/or artifacts for this run** -- the exposure window is **NOT** closed. Delete manually if needed:"
+            echo "  - Logs: \`gh api -X DELETE repos/${REPO}/actions/runs/${RUN_ID}/logs\`"
+            echo "  - Artifact: \`gh api -X DELETE repos/${REPO}/actions/artifacts/ARTIFACT_ID\`"
+            echo "  - Or re-run this scan."
           fi
-          # Don't unconditionally claim the artifact is there -- the upload
-          # step above can itself fail (including via its own
+          # Don't unconditionally claim the evidence artifact is there -- the
+          # upload step above can itself fail (including via its own
           # if-no-files-found: error), and this step still runs regardless
           # via always().
           if [[ "${UPLOAD_OK}" == "true" ]]; then
-            echo "- A redacted copy is attached as the \`redacted-logs-${RUN_ID}\` artifact for debugging."
+            echo "- A redacted copy is attached as the \`redacted-logs-${RUN_ID}\` artifact for debugging (paths under \`logs/\` and/or \`artifacts/\`)."
           else
             echo "- :warning: **Failed to upload the redacted-logs artifact** -- no redacted copy is attached; check the run logs for the upload step's failure."
           fi
@@ -151,7 +161,14 @@ runs:
           echo ""
           echo "| Rule | File | Line |"
           echo "|---|---|---|"
-          # Escape literal `|` in RuleID/File so a pipe in a log path can't
-          # break the rendered Markdown table.
-          jq -r '.[] | "| \(.RuleID | gsub("\\|"; "\\|")) | \(.File | gsub("\\|"; "\\|")) | \(.StartLine) |"' "${OUTPUT_DIR}/findings.json"
+          # Shared escape in .github/scripts/md-cell.jq (same as PR comment).
+          # Resolve via GITHUB_ACTION_PATH so cross-repo `uses:` callers that
+          # never check out osac-test-infra still find the jq module (same
+          # pattern as scan-run-logs.sh above).
+          # File is already prefixed logs/ or artifacts/<name>/ by scan-run-logs.sh.
+          SCRIPTS_DIR="${GITHUB_ACTION_PATH}/../../scripts"
+          jq -r -L "${SCRIPTS_DIR}" '
+            include "md-cell";
+            .[] | "| \(.RuleID | cell) | \(.File | cell) | \(.StartLine) |"
+          ' "${OUTPUT_DIR}/findings.json"
         } >> "$GITHUB_STEP_SUMMARY"
