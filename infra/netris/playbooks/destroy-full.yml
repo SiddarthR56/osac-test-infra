@@ -260,7 +260,8 @@
     - name: Remove OCP DNS config from mgmt-server
       ansible.builtin.shell:
         cmd: >-
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.16.1
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+          root@{{ servers_gw | ansible.utils.ipaddr('address') }}
           "rm -f /etc/dnsmasq.d/ocp-sno.conf && systemctl restart dnsmasq" 2>/dev/null || true
       failed_when: false
       changed_when: true

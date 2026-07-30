@@ -126,6 +126,9 @@ pre_retry_cleanup() {
     local step="$1"
     echo "=== Running pre-retry cleanup for $step ==="
     sync
+    # 192.168.122.15 = isp-server (FRR/BGP router on virbr0, Ubuntu VM).
+    # Clears apt locks that can get stuck if lab setup is interrupted.
+    # This is a topology constant — same IP hardcoded in netris-lab/ submodule.
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@192.168.122.15 \
         "pkill -9 apt; rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock* /var/cache/apt/archives/lock; sleep 2" 2>/dev/null || true
 }

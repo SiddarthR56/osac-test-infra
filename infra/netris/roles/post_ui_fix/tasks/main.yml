@@ -1,4 +1,24 @@
 ---
+# post_ui_fix — Workaround for upstream installer bug
+#
+# After snapshot restore, refresh-after-snapshot.py does NOT update:
+# - KC_HOSTNAME (Keycloak deployment env)
+# - OIDC client redirect URIs
+# - fulfillment-controller --auth-issuer-url / --idp-url
+# - fulfillment-grpc-server --grpc-authn-trusted-token-issuers
+# - CA bundle trust for the new ingress certificate
+#
+# CI never hits this because it doesn't change cluster identity and doesn't
+# use the UI. This role patches all of the above for BM redeployments where
+# the cluster domain changes between deploys.
+#
+# Phase 3 uses arg-index patching (jq to_entries + JSON patch by index)
+# because the auth URLs are NOT exposed as Helm values — they're computed
+# internally by the chart template and baked into the command array. There
+# is no values.yaml path to set them via `helm upgrade --set`. The approach
+# is version-coupled to the chart's command layout, but safe because we pin
+# the snapshot image (chart version is locked to the snapshot build).
+
 # Phase 1: Keycloak Configuration
 
 - name: Detect active OSAC namespace

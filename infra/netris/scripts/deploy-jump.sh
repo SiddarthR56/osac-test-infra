@@ -15,6 +15,9 @@ set -euo pipefail
 #   8. Write config file + symlink credentials
 #   9. Start `make redeploy-fresh` in a tmux session on the server
 #
+# Authentication: SSH key auth is preferred (no PASSWORD needed).
+# Set PASSWORD only for initial bootstrap when key auth isn't yet configured.
+#
 # Usage: source scripts/env.sh && make deploy-jump
 # Requires: SERVER, LAB_NAME, PULL_SECRET, LICENSE_KEY, LICENSE_ZIP env vars
 
