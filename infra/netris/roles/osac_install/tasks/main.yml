@@ -201,7 +201,6 @@
     KUBECONFIG: /root/.kube/config
   loop:
     - osac-management-config
-    - osac-os-clouds
     - osac-inventory-config
   changed_when: false
   register: _secrets_result
