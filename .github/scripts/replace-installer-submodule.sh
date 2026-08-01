@@ -56,12 +56,17 @@ fi
 # isn't a suffix of its submodule dir -- confirmed it would match zero directories
 # for a new mono-repo consolidation target ("osac"), which would have caused E2E
 # to silently test the stale submodule pin instead of the PR's changes.
-# Update this map whenever submodules are added, renamed, or removed.
+#
+# osac-operator, fulfillment-service, osac-aap, and bare-metal-fulfillment-operator
+# were removed from this map once they merged into the osac-project/osac mono-repo:
+# the e2e reusable workflows now skip calling this script entirely for any component
+# built from the same repo as the installer itself, since that component is already
+# a correct sibling directory inside the installer's own checkout -- no splice needed.
+# This script is only still invoked for components that remain genuinely separate
+# repos. Update this map whenever that changes (a submodule is added, renamed, or
+# removed, or a component here merges into a mono-repo and stops needing a splice).
 declare -A SUBMODULE_MAP=(
-  [osac-operator]="osac-operator"
-  [fulfillment-service]="osac-fulfillment-service"
-  [osac-aap]="osac-aap"
-  [bare-metal-fulfillment-operator]="bare-metal-fulfillment-operator"
+  [osac-ui]="osac-ui"
 )
 
 SUBMODULE_NAME="${SUBMODULE_MAP[${REPO_NAME}]:-}"
