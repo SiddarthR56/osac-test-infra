@@ -526,6 +526,10 @@ jobs:
             # still genuinely separate repos (e.g. osac-ui) need their source
             # spliced into base/.
             if [[ "${repo}" == "${INSTALLER_REPO}" ]]; then
+              if [[ "${ref}" != "${INSTALLER_REF}" ]]; then
+                echo "::error::Component ${repo}@${ref} (${file}) shares the installer's repo, but installer-ref (${INSTALLER_REF}) doesn't match the component's ref (${ref}). Skipping the splice would silently test the wrong installer state -- pass a matching installer-ref (usually the same PR ref) and retry." >&2
+                exit 1
+              fi
               echo "Component ${repo}@${ref} (${file}) shares this installer's own checkout -- skipping splice."
               continue
             fi
