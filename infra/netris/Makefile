@@ -3,10 +3,11 @@
        run-snapshot-refresh post-snapshot-refresh \
        setup-caas deploy-caas \
        deploy-vmaas deploy-bmaas \
-       destroy destroy-osac destroy-ocp destroy-caas destroy-vmaas destroy-bmaas \
+       destroy destroy-full destroy-osac destroy-ocp destroy-caas destroy-vmaas destroy-bmaas \
        connectivity prep-osac run-osac-setup post-osac vendor-update lint \
        gather gather-lab gather-caas \
-       cleanup-dns
+       cleanup-dns \
+       deploy-jump redeploy-fresh redeploy-continue disk-setup access-doc post-install health-check
 
 EXTRA_VARS ?=
 ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)')
@@ -73,6 +74,8 @@ prep-snapshot-refresh:
 	ansible-playbook playbooks/prep-snapshot-refresh.yml $(ANSIBLE_EXTRA)
 
 run-snapshot-refresh:
+	@echo "=== Cleaning stale APIServices (prevent AAP reconciliation race) ==="
+	@oc get apiservice -o json | python3 -c "import sys,json; [print(i['metadata']['name']) for i in json.load(sys.stdin)['items'] for c in i.get('status',{}).get('conditions',[]) if c['type']=='Available' and c['status']=='False']" | xargs -r oc delete apiservice || true
 	@echo "=== Running OSAC refresh with live output ==="
 	cd /opt/osac-installer && \
 		KUBECONFIG=/root/.kube/config \
@@ -87,6 +90,9 @@ post-snapshot-refresh:
 destroy:
 	ansible-playbook playbooks/destroy.yml $(ANSIBLE_EXTRA)
 
+destroy-full:
+	ansible-playbook playbooks/destroy-full.yml $(ANSIBLE_EXTRA)
+
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
 	cd /opt/osac-installer && source /tmp/osac-setup.env && \
@@ -99,7 +105,7 @@ destroy-ocp:
 	ansible-playbook playbooks/destroy-ocp.yml $(ANSIBLE_EXTRA)
 
 destroy-caas:
-	@echo "CaaS teardown is not yet implemented"
+	ansible-playbook playbooks/destroy-caas.yml $(ANSIBLE_EXTRA)
 
 destroy-vmaas:
 	@echo "VMaaS teardown is not yet implemented"
@@ -127,3 +133,30 @@ gather-caas:
 
 cleanup-dns:
 	ansible-playbook playbooks/cleanup-dns.yml $(ANSIBLE_EXTRA)
+
+# --- Operational tooling (BM lab management) ---
+
+redeploy-fresh:
+	@echo "=== Destroying all infrastructure ==="
+	-$(MAKE) destroy-full
+	@sync
+	@echo "=== Starting fresh deploy ==="
+	scripts/redeploy-server.sh --fresh "$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
+
+redeploy-continue:
+	scripts/redeploy-server.sh "$(EXTRA_VARS)" 2>&1 | tee -a /root/deploy.log
+
+deploy-jump:
+	@scripts/deploy-jump.sh
+
+disk-setup:
+	ansible-playbook playbooks/disk-setup.yml $(ANSIBLE_EXTRA)
+
+access-doc:
+	ansible-playbook playbooks/access-doc.yml $(ANSIBLE_EXTRA)
+
+post-install:
+	ansible-playbook playbooks/post-install.yml $(ANSIBLE_EXTRA)
+
+health-check:
+	scripts/health-check.sh

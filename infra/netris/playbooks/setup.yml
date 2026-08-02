@@ -7,6 +7,14 @@
 # exists" shortcut instead of hitting the broken code path. Guarded with
 # `| default({})`/`| default('')` so this has no effect on unrelated get_url
 # tasks elsewhere in this play (e.g. prerequisites' own "Download Go").
+- name: Provision data disk (opt-in via disk_setup_enabled=true)
+  hosts: all
+  gather_facts: true
+  become: true
+  roles:
+    - role: disk_setup
+      when: disk_setup_enabled | default(false) | bool
+
 - name: Setup Netris lab (prerequisites + cache)
   hosts: all
   gather_facts: true

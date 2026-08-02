@@ -36,6 +36,7 @@ Internet access for OCP image pulls flows through: hgx-00 → NS VNet → softga
 - **Bare-metal host** running RHEL 9.x or Rocky Linux 9.x with KVM support
 - **System packages** — `dnf install -y git make ansible-core python3-pip && pip3 install ansible`
 - **Resources**: ~32+ CPU cores, 128+ GB RAM (lab VMs + OCP SNO VM)
+- **Storage**: ~400GB+ for OCP disk images, K3s, and containers. If the root partition is smaller, use a secondary data disk and enable automatic provisioning with `disk_setup_enabled=true` (via `EXTRA_VARS` or in the config). Run `make disk-setup` standalone or pass the variable during setup: `make setup EXTRA_VARS="disk_setup_enabled=true"`
 - **Netris license key** — place at repo root as `license.key`
 - **OSAC/AAP license** — place at repo root as `license.zip`
 - **OpenShift pull secret** — place at `/root/pull-secret` (or set `pull_secret_path`; download from [console.redhat.com](https://console.redhat.com/openshift/downloads))
@@ -116,7 +117,7 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make destroy` | Tear down everything: OSAC + OCP artifacts + netris-lab |
 | `make destroy-osac` | Tear down OSAC: helm releases, operators, CRDs, namespaces (live output) |
 | `make destroy-ocp` | Reset OCP for reinstall: delete cluster, recreate disk, boot VM |
-| `make destroy-caas` | CaaS teardown (not yet implemented) |
+| `make destroy-caas` | CaaS teardown: stop discovery VMs, remove disks/ISO, delete namespace, clean DNS |
 | `make destroy-vmaas` | VMaaS teardown (not yet implemented) |
 | `make destroy-bmaas` | BMaaS teardown (not yet implemented) |
 
@@ -179,6 +180,56 @@ make deploy-caas    # create cluster
 make destroy        # tear down everything
 make deploy-fast    # full redeploy (snapshot path)
 ```
+
+### Bare-Metal Lab Deployment (from laptop)
+
+For persistent bare-metal servers behind NAT (e.g., Red Hat lab infrastructure), use the remote deploy workflow. This handles image caching, bootstrapping, and resilient multi-step deploys from your laptop.
+
+**One-time setup:**
+```bash
+git clone --recurse-submodules https://github.com/osac-project/osac-test-infra.git
+cd osac-test-infra/infra/netris
+
+# Create env file from template (one per server, gitignored)
+cp scripts/env.sh.example scripts/env.sh
+# Edit scripts/env.sh with: SERVER IP, PASSWORD, LAB_NAME, secrets paths, AWS keys
+```
+
+**Deploy:**
+```bash
+source scripts/env.sh && make deploy-jump
+```
+
+This single command:
+1. Pre-caches container images on your laptop (with retries, avoids rate limits)
+2. Rsyncs the repo + cached images to the server
+3. Bootstraps packages (EPEL, Ansible, pip deps)
+4. Sets up data disk (partition, mount, symlinks, SELinux)
+5. Destroys any previous deployment
+6. Runs the full pipeline: setup → deploy-lab → deploy-ocp-snapshot → setup-caas → deploy-caas → post-install
+
+**Monitor:**
+```bash
+ssh root@$SERVER -t tmux attach -t deploy
+ssh root@$SERVER tail -f /root/deploy.log
+```
+
+**Multiple servers:** Create one env file per server (`scripts/env-mylab.sh`), then:
+```bash
+source scripts/env-mylab.sh && make deploy-jump
+```
+
+**BM-specific make targets (run on server):**
+
+| Target | Description |
+|--------|-------------|
+| `make redeploy-fresh` | Destroy + wipe progress + full fresh deploy |
+| `make disk-setup` | Auto-detect and mount data disk |
+| `make post-install` | Fix Keycloak/UI + generate access doc |
+| `make access-doc` | Generate handover documentation only |
+| `make health-check` | Quick status verification |
+
+See the PR description for known issues and workarounds specific to BM/RHEL environments.
 
 ## Accessing OCP Routes
 
