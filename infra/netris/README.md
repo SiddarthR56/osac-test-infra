@@ -117,7 +117,7 @@ After deployment, the kubeconfig is at `/root/.kube/config`.
 | `make destroy` | Tear down everything: OSAC + OCP artifacts + netris-lab |
 | `make destroy-osac` | Tear down OSAC: helm releases, operators, CRDs, namespaces (live output) |
 | `make destroy-ocp` | Reset OCP for reinstall: delete cluster, recreate disk, boot VM |
-| `make destroy-caas` | CaaS teardown (not yet implemented) |
+| `make destroy-caas` | CaaS teardown: stop discovery VMs, remove disks/ISO, delete namespace, clean DNS |
 | `make destroy-vmaas` | VMaaS teardown (not yet implemented) |
 | `make destroy-bmaas` | BMaaS teardown (not yet implemented) |
 

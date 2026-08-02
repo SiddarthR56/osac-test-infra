@@ -1,13 +1,4 @@
 ---
-- name: Wait for OCP API to be reachable
-  ansible.builtin.command:
-    cmd: oc get nodes
-  register: _api_check
-  until: _api_check.rc == 0
-  retries: 30
-  delay: 10
-  changed_when: false
-
 - name: Clone osac-installer
   ansible.builtin.git:
     repo: "{{ osac_installer_repo }}"

@@ -34,11 +34,6 @@
     - /var/lib/libvirt/images/hgx-00-lvm.qcow2
     - /var/lib/libvirt/images/{{ ocp_cluster_name | default('ocp-sno') }}_infra-env.iso
 
-- name: Remove CaaS discovery disks
-  ansible.builtin.shell:
-    cmd: rm -f /var/lib/libvirt/images/*-disk.qcow2 /var/lib/libvirt/images/caas-discovery.iso
-  changed_when: true
-
 - name: Remove cached snapshot flavors (force fresh pull on next deploy)
   ansible.builtin.file:
     path: /var/cache/netris-lab/cluster-flavors
