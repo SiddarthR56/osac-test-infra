@@ -31,17 +31,18 @@ test-bmaas:
 
 # ─── Infrastructure orchestration ───────────────────────────────────
 
-INFRA       ?= netris
-SUITE       ?= caas
-EXTRA_VARS  ?=
-INFRA_DIR    = infra/$(INFRA)
+INFRA              ?= netris
+SUITE              ?= caas
+EXTRA_VARS         ?=
+OSAC_DEPLOY_MODE   ?= fresh
+INFRA_DIR           = infra/$(INFRA)
 
-.PHONY: e2e setup-infra deploy-infra deploy-osac setup-suite run-tests \
-        destroy-osac destroy-infra gather-infra redeploy-osac \
+.PHONY: e2e setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests \
+        destroy-ocp destroy-osac destroy-infra gather-infra gather-suite redeploy-osac \
         _validate-backend _validate-suite-contract
 
 _validate-backend:
-	@if [ ! -f $(INFRA_DIR)/contract.mk ]; then \
+	@if [ ! -f $(INFRA_DIR)/Makefile ]; then \
 		echo "ERROR: backend '$(INFRA)' not found at $(INFRA_DIR)/"; exit 1; \
 	fi
 	@. $(INFRA_DIR)/capabilities && \
@@ -68,34 +69,40 @@ _validate-suite-contract:
 		fi; \
 	fi
 
-e2e: _validate-backend setup-infra deploy-infra deploy-osac setup-suite run-tests
+e2e: _validate-backend setup-infra deploy-infra deploy-ocp deploy-osac setup-suite run-tests
 
 setup-infra: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk setup-infra EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) setup-infra EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
 
 deploy-infra: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-infra EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) deploy-infra EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
+
+deploy-ocp: _validate-backend
+	$(MAKE) -C $(INFRA_DIR) deploy-ocp EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
 
 deploy-osac: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk deploy-osac EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) deploy-osac EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
 
 setup-suite: _validate-backend
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) setup-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)' OSAC_DEPLOY_MODE=$(OSAC_DEPLOY_MODE)
 
 run-tests: _validate-suite-contract
 	@set -a && . $(INFRA_DIR)/.env.infra && set +a && \
 		$(MAKE) test-$(SUITE)
 
+destroy-ocp:
+	$(MAKE) -C $(INFRA_DIR) destroy-ocp EXTRA_VARS='$(EXTRA_VARS)'
+
 destroy-osac:
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk destroy-osac EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) destroy-osac EXTRA_VARS='$(EXTRA_VARS)'
 
 destroy-infra:
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk destroy-infra EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) destroy-infra EXTRA_VARS='$(EXTRA_VARS)'
 
 gather-infra:
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk gather-infra EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) gather-infra EXTRA_VARS='$(EXTRA_VARS)'
 
 gather-suite:
-	$(MAKE) -C $(INFRA_DIR) -f contract.mk gather-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
+	$(MAKE) -C $(INFRA_DIR) gather-$(SUITE) EXTRA_VARS='$(EXTRA_VARS)'
 
 redeploy-osac: destroy-osac deploy-osac

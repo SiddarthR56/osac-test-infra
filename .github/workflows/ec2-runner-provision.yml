@@ -124,6 +124,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ steps.aws-creds.outputs.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ steps.aws-creds.outputs.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
+          EC2_KEY_PAIR: ${{ steps.network-config.outputs.EC2_KEY_PAIR }}
         run: |
           export ORCHESTRATOR_PUBKEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator.pub"
           export SSH_KEY_PATH="${HOME}/.ssh/osac_ec2_orchestrator"

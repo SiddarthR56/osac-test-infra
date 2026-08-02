@@ -9,7 +9,7 @@
 # unique run ID). This is purely observational — any status-tracking failure
 # is silently ignored to avoid breaking the deploy flow.
 #
-# Steps: setup → deploy-lab → deploy-ocp-snapshot → setup-caas → deploy-caas → post-install
+# Steps: setup-infra → deploy-infra → deploy-ocp → deploy-osac → setup-caas → deploy-caas → post-install
 #
 # Usage:
 #   make redeploy-fresh          → runs this script with --fresh
@@ -44,7 +44,7 @@ status_init() {
         if [[ ! -f "$STATUS_FILE" ]]; then
             echo '{"runs":{},"current_run":null}' > "$STATUS_FILE"
         fi
-        local steps_json='{"setup":{"status":"pending"},"deploy-lab":{"status":"pending"},"deploy-ocp-snapshot":{"status":"pending"},"setup-caas":{"status":"pending"},"deploy-caas":{"status":"pending"},"post-install":{"status":"pending"}}'
+        local steps_json='{"setup-infra":{"status":"pending"},"deploy-infra":{"status":"pending"},"deploy-ocp":{"status":"pending"},"deploy-osac":{"status":"pending"},"setup-caas":{"status":"pending"},"deploy-caas":{"status":"pending"},"post-install":{"status":"pending"}}'
         jq --arg id "$RUN_ID" --argjson steps "$steps_json" \
             '.runs[$id] = {"started_at": (now | todate), "overall_status": "running", "steps": $steps} | .current_run = $id' \
             "$STATUS_FILE" > "${STATUS_FILE}.tmp" && mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
@@ -153,9 +153,10 @@ echo ""
 # --- Main pipeline ---
 
 STEPS=(
-    setup
-    deploy-lab
-    deploy-ocp-snapshot
+    setup-infra
+    deploy-infra
+    deploy-ocp
+    deploy-osac
     setup-caas
     deploy-caas
     post-install

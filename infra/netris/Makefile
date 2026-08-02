@@ -1,119 +1,128 @@
-.PHONY: deploy deploy-fast setup deploy-lab deploy-ocp deploy-ocp-snapshot deploy-osac \
-       restore-ocp-snapshot snapshot-refresh prep-snapshot-refresh \
-       run-snapshot-refresh post-snapshot-refresh \
-       setup-caas deploy-caas \
-       deploy-vmaas deploy-bmaas \
-       destroy destroy-full destroy-osac destroy-ocp destroy-caas destroy-vmaas destroy-bmaas \
-       connectivity prep-osac run-osac-setup post-osac vendor-update lint \
-       gather gather-lab gather-caas \
-       cleanup-dns \
-       deploy-jump redeploy-fresh redeploy-continue disk-setup access-doc post-install health-check
+# ─── Variables ──────────────────────────────────────────────────────
 
+OSAC_DEPLOY_MODE ?= fresh
 EXTRA_VARS ?=
-ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)')
+ANSIBLE_EXTRA = $(if $(EXTRA_VARS),-e '$(EXTRA_VARS)') -e osac_deploy_mode=$(OSAC_DEPLOY_MODE)
+ENV_INFRA := .env.infra
 
-# Full shared pipeline
-deploy: deploy-lab deploy-ocp deploy-osac
+OSAC_NAMESPACE ?= osac-e2e-ci
+OSAC_VALUES_FILE ?= values/caas-ci/values.yaml
+OSAC_PULL_SECRET_PATH ?= /root/pull-secret
 
-setup:
-	ansible-playbook playbooks/setup.yml $(ANSIBLE_EXTRA)
+# ─── Convenience targets ───────────────────────────────────────────
+#
+#   make deploy       — full fresh install (default)
+#   make deploy-fast  — snapshot restore + OSAC refresh (~25 min)
+#
+# Both run: deploy-infra → deploy-ocp → deploy-osac
+# The difference is OSAC_DEPLOY_MODE, which controls:
+#   - deploy-ocp: which snapshot flavor to use
+#   - deploy-osac: fresh Helm install vs snapshot refresh
 
-deploy-lab:
-	ansible-playbook playbooks/deploy-lab.yml $(ANSIBLE_EXTRA)
+deploy: deploy-infra deploy-ocp deploy-osac
 
-connectivity:
-	ansible-playbook playbooks/connectivity-lab.yml $(ANSIBLE_EXTRA)
+deploy-fast: deploy-infra deploy-ocp deploy-osac
+deploy-fast: OSAC_DEPLOY_MODE = snapshot
+
+# ─── Contract targets ──────────────────────────────────────────────
+#
+# Called by the root Makefile (make -C infra/netris <target>).
+# See infra/contract.md for the interface spec.
+
+setup-infra:
+	ansible-playbook playbooks/setup-infra.yml $(ANSIBLE_EXTRA)
+
+deploy-infra:
+	ansible-playbook playbooks/deploy-infra.yml $(ANSIBLE_EXTRA)
 
 deploy-ocp:
-	ansible-playbook playbooks/setup-ocp.yml $(ANSIBLE_EXTRA)
-	ansible-playbook playbooks/install-ocp.yml $(ANSIBLE_EXTRA)
+	ansible-playbook playbooks/deploy-ocp.yml $(ANSIBLE_EXTRA)
 
-deploy-osac: prep-osac run-osac-setup post-osac
+deploy-osac:
+	@if [ "$(OSAC_DEPLOY_MODE)" = "snapshot" ]; then \
+		$(MAKE) refresh-osac OSAC_DEPLOY_MODE=snapshot; \
+	else \
+		$(MAKE) install-osac; \
+	fi
+	@printf '%s\n' \
+		'KUBECONFIG=/root/.kube/config' \
+		'OSAC_NAMESPACE=$(OSAC_NAMESPACE)' \
+		'OSAC_VM_KUBECONFIG=/root/.kube/config' \
+		'OSAC_PULL_SECRET_PATH=$(OSAC_PULL_SECRET_PATH)' \
+		> $(ENV_INFRA)
 
-prep-osac:
-	ansible-playbook playbooks/prep-osac.yml $(ANSIBLE_EXTRA)
-
-run-osac-setup:
-	@echo "=== Rebuilding Helm chart dependencies ==="
-	cd /opt/osac-installer && helm dependency update charts/osac/
-	@echo "=== Running OSAC setup.sh with live output ==="
-	@for attempt in $$(seq 1 10); do \
-		echo "--- Attempt $$attempt of 10 ---"; \
-		cd /opt/osac-installer && source /tmp/osac-setup.env && ./scripts/setup.sh && break; \
-		if [ $$attempt -eq 10 ]; then echo "setup.sh failed after 10 attempts"; exit 1; fi; \
-		echo "setup.sh failed, retrying in 3 minutes..."; sleep 180; \
-	done
-
-post-osac:
-	ansible-playbook playbooks/post-osac.yml $(ANSIBLE_EXTRA)
-
-# Per-flow targets — run after deploy
 setup-caas:
 	ansible-playbook playbooks/setup-caas.yml $(ANSIBLE_EXTRA)
 
 deploy-caas:
 	ansible-playbook playbooks/deploy-caas.yml $(ANSIBLE_EXTRA)
 
-deploy-vmaas:
-	@echo "VMaaS flow is not yet implemented"
-
-deploy-bmaas:
-	@echo "BMaaS flow is not yet implemented"
-
-# Snapshot-based fast deployment
-deploy-fast: deploy-lab deploy-ocp-snapshot
-
-deploy-ocp-snapshot: restore-ocp-snapshot snapshot-refresh
-
-restore-ocp-snapshot:
-	ansible-playbook playbooks/restore-ocp-snapshot.yml $(ANSIBLE_EXTRA)
-
-snapshot-refresh: prep-snapshot-refresh run-snapshot-refresh post-snapshot-refresh
-
-prep-snapshot-refresh:
-	ansible-playbook playbooks/prep-snapshot-refresh.yml $(ANSIBLE_EXTRA)
-
-run-snapshot-refresh:
-	@echo "=== Cleaning stale APIServices (prevent AAP reconciliation race) ==="
-	@oc get apiservice -o json | python3 -c "import sys,json; [print(i['metadata']['name']) for i in json.load(sys.stdin)['items'] for c in i.get('status',{}).get('conditions',[]) if c['type']=='Available' and c['status']=='False']" | xargs -r oc delete apiservice || true
-	@echo "=== Running OSAC refresh with live output ==="
-	cd /opt/osac-installer && \
-		KUBECONFIG=/root/.kube/config \
-		VALUES_FILE=$(or $(SNAPSHOT_VALUES_FILE),values/caas-ci/values.yaml) \
-		INSTALLER_NAMESPACE=$(or $(SNAPSHOT_NAMESPACE),osac-e2e-ci) \
-		python3 -u scripts/refresh-after-snapshot.py
-
-post-snapshot-refresh:
-	ansible-playbook playbooks/post-snapshot-refresh.yml $(ANSIBLE_EXTRA)
-
-# Destroy targets
-destroy:
-	ansible-playbook playbooks/destroy.yml $(ANSIBLE_EXTRA)
-
-destroy-full:
-	ansible-playbook playbooks/destroy-full.yml $(ANSIBLE_EXTRA)
-
 destroy-osac:
 	@echo "=== Tearing down OSAC ==="
-	cd /opt/osac-installer && source /tmp/osac-setup.env && \
-		EXTRA_SERVICES=true ./scripts/teardown.sh || true
-	oc delete namespace osac-devel shared --ignore-not-found --wait=false 2>/dev/null || true
-	rm -rf /opt/osac-installer
-	rm -f /tmp/osac-setup.env
+	cd /opt/osac/osac-installer && make uninstall \
+		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
+		VALUES_FILE=$(OSAC_VALUES_FILE) 2>/dev/null || true
+	rm -rf /opt/osac
+	@rm -f $(ENV_INFRA)
 
 destroy-ocp:
 	ansible-playbook playbooks/destroy-ocp.yml $(ANSIBLE_EXTRA)
 
+destroy-infra:
+	ansible-playbook playbooks/destroy-infra.yml $(ANSIBLE_EXTRA)
+	@rm -f $(ENV_INFRA)
+
 destroy-caas:
 	ansible-playbook playbooks/destroy-caas.yml $(ANSIBLE_EXTRA)
 
-destroy-vmaas:
-	@echo "VMaaS teardown is not yet implemented"
+gather-infra:
+	ansible-playbook playbooks/gather-infra.yml $(ANSIBLE_EXTRA)
 
-destroy-bmaas:
-	@echo "BMaaS teardown is not yet implemented"
+gather-mgmt-cluster:
+	ansible-playbook playbooks/gather-mgmt-cluster.yml $(ANSIBLE_EXTRA)
 
-# Utilities
+gather-caas:
+	ansible-playbook playbooks/gather-caas.yml $(ANSIBLE_EXTRA)
+
+# ─── Internal sub-targets (deploy-osac implementation) ─────────────
+
+# Fresh install: clone mono-repo, patch Helm values, run make install
+install-osac: prep-osac run-osac-setup post-osac
+
+prep-osac:
+	ansible-playbook playbooks/prep-osac.yml $(ANSIBLE_EXTRA)
+
+run-osac-setup:
+	@echo "=== Installing OSAC via Helm (make install) ==="
+	cd /opt/osac/osac-installer && make install \
+		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
+		VALUES_FILE=$(OSAC_VALUES_FILE)
+
+post-osac:
+	ansible-playbook playbooks/post-osac.yml $(ANSIBLE_EXTRA)
+
+# Snapshot refresh: clone mono-repo, patch values, run refresh-after-snapshot.py
+refresh-osac: prep-refresh-osac run-refresh-osac post-refresh-osac
+
+prep-refresh-osac:
+	ansible-playbook playbooks/prep-refresh-osac.yml $(ANSIBLE_EXTRA)
+
+run-refresh-osac:
+	@echo "=== Running OSAC refresh ==="
+	cd /opt/osac/osac-installer && \
+		KUBECONFIG=/root/.kube/config \
+		VALUES_FILE=$(OSAC_VALUES_FILE) \
+		INSTALLER_NAMESPACE=$(OSAC_NAMESPACE) \
+		python3 -u scripts/refresh-after-snapshot.py
+
+post-refresh-osac:
+	ansible-playbook playbooks/post-refresh-osac.yml $(ANSIBLE_EXTRA)
+
+# ─── Utilities ─────────────────────────────────────────────────────
+
+connectivity:
+	ansible-playbook playbooks/connectivity.yml $(ANSIBLE_EXTRA)
+
 vendor-update:
 	rm -rf vendor/ansible_collections
 	ansible-galaxy collection install -r requirements.yml -p vendor --force
@@ -122,19 +131,13 @@ vendor-update:
 lint:
 	ansible-lint
 
-gather:
-	ansible-playbook playbooks/gather.yml $(ANSIBLE_EXTRA)
-
-gather-lab:
-	ansible-playbook playbooks/gather-lab.yml $(ANSIBLE_EXTRA)
-
-gather-caas:
-	ansible-playbook playbooks/gather-caas.yml $(ANSIBLE_EXTRA)
-
 cleanup-dns:
 	ansible-playbook playbooks/cleanup-dns.yml $(ANSIBLE_EXTRA)
 
-# --- Operational tooling (BM lab management) ---
+# ─── Operational tooling (BM lab management) ───────────────────────
+
+destroy-full:
+	ansible-playbook playbooks/destroy-full.yml $(ANSIBLE_EXTRA)
 
 redeploy-fresh:
 	@echo "=== Destroying all infrastructure ==="
@@ -160,3 +163,15 @@ post-install:
 
 health-check:
 	scripts/health-check.sh
+
+# ─── .PHONY ────────────────────────────────────────────────────────
+
+.PHONY: deploy deploy-fast \
+        setup-infra deploy-infra deploy-ocp deploy-osac \
+        setup-caas deploy-caas \
+        destroy-osac destroy-ocp destroy-infra destroy-caas destroy-full \
+        gather-infra gather-mgmt-cluster gather-caas \
+        install-osac prep-osac run-osac-setup post-osac \
+        refresh-osac prep-refresh-osac run-refresh-osac post-refresh-osac \
+        connectivity vendor-update lint cleanup-dns \
+        redeploy-fresh redeploy-continue deploy-jump disk-setup access-doc post-install health-check

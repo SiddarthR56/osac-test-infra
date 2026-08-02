@@ -2,7 +2,7 @@
 name: Fetch CaaS Route 53 credentials
 description: >-
   Retrieve the AWS credentials the CaaS/Netris e2e flow uses for Route 53
-  DNS management (infra/netris's ocp_dns role: ChangeResourceRecordSets/
+  DNS management (infra/netris's configure-dns role: ChangeResourceRecordSets/
   ListHostedZones/GetChange on the shared hosted zone) from Vault. Separate
   from fetch-ec2-runner-aws-creds, which is scoped to EC2 lifecycle actions
   only and has no Route 53 permissions at all -- confirmed directly against
