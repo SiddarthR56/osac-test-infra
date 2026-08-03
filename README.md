@@ -84,8 +84,8 @@ All secret files are gitignored.
 When you run `make e2e INFRA=netris SUITE=caas`, the following happens:
 
 1. **Validate** — checks that the `netris` backend exists and supports the `caas` suite
-2. **`setup-infra`** — installs prerequisites, caches images (`ansible-playbook playbooks/setup.yml`)
-3. **`deploy-infra`** — deploys the Netris lab, OCP cluster from snapshot (`make deploy-fast`)
+2. **`setup-infra`** — installs prerequisites, caches images (`ansible-playbook playbooks/setup-infra.yml`)
+3. **`deploy-infra`** — deploys the Netris lab (`ansible-playbook playbooks/deploy-infra.yml`)
 4. **`deploy-osac`** — refreshes OSAC on the restored cluster, writes `.env.infra` with cluster access credentials
 5. **`setup-suite`** — runs CaaS-specific infrastructure setup (creates InfraEnv, boots discovery VMs, registers agents)
 6. **`run-tests`** — validates `.env.infra` has the required variables, sources it, runs `pytest tests/caas/`
@@ -166,7 +166,7 @@ See [AGENTS.md](AGENTS.md) for the fuller env var reference used by the pytest f
 ## Adding a New Backend
 
 Create `infra/<name>/` with:
-- `contract.mk` — Makefile implementing the contract targets (see `infra/contract.md`)
+- `Makefile` — Makefile implementing the contract targets (see `infra/contract.md`)
 - `capabilities` — shell-sourceable file declaring `SUPPORTED_SUITES="suite1 suite2"`
 
 No changes to test code or the top-level Makefile are needed.

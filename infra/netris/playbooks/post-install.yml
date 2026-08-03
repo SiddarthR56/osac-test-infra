@@ -3,5 +3,5 @@
   hosts: all
   gather_facts: false
   roles:
-    - post_ui_fix
-    - access_doc
+    - post-ui-fix
+    - access-doc

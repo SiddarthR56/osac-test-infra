@@ -178,6 +178,7 @@ if ! aws ec2 run-instances \
         --user-data "file://${USER_DATA_FILE}" \
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${INSTANCE_NAME}},{Key=osac-ephemeral,Value=true},{Key=osac-run-id,Value=${RUN_ID}}]" \
         --block-device-mappings "[{\"DeviceName\":\"${ROOT_DEVICE_NAME}\",\"Ebs\":{\"VolumeSize\":${ROOT_VOLUME_SIZE_GB},\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
+        ${EC2_KEY_PAIR:+--key-name "$EC2_KEY_PAIR"} \
         --count 1 \
         --output json \
         > "$RUN_INSTANCES_OUTPUT" 2>&1; then

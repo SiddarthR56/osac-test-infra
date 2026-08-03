@@ -299,8 +299,8 @@
         path: "{{ item }}"
         state: absent
       loop:
-        - /opt/osac-installer
-        - /opt/fulfillment-service
+        - /opt/osac
+
         - /opt/netris-lab
         - /root/.config/osac
         - /root/.kube

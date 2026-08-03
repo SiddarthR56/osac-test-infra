@@ -24,7 +24,7 @@ The repo has two layers, connected by a **contract** (see [`infra/contract.md`](
 and [README.md](README.md) for the human-facing overview):
 
 - **`infra/<backend>/`** — pluggable infrastructure backends that provision a cluster and deploy
-  OSAC. Each backend implements `contract.mk` (targets `setup-infra`, `deploy-infra`, `deploy-osac`,
+  OSAC. Each backend implements `Makefile` (targets `setup-infra`, `deploy-infra`, `deploy-osac`,
   `setup-<suite>`, `destroy-osac`, `destroy-infra`, `gather-infra`, `gather-<suite>`) and a
   `capabilities` file declaring `SUPPORTED_SUITES`. `deploy-osac` writes `.env.infra` with the
   cluster config tests need. Currently only `infra/netris/` is implemented (`SUPPORTED_SUITES="caas"`
@@ -50,7 +50,7 @@ pytest tests, everything below in this file still applies unchanged.
 osac-test-infra/
 ├── infra/
 │   ├── contract.md     # Backend contract spec (targets, capabilities, .env.infra)
-│   └── netris/         # Ansible-based backend (contract.mk, capabilities, vendored netris-lab/)
+│   └── netris/         # Ansible-based backend (Makefile, capabilities, vendored netris-lab/)
 ├── tests/
 │   ├── vmaas/          # ComputeInstance lifecycle, console, security, subnets
 │   ├── caas/           # ClusterOrder lifecycle, credentials, templates

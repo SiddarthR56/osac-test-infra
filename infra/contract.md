@@ -4,7 +4,7 @@ Each backend lives in `infra/<name>/` and must provide:
 
 ## Required Files
 
-- `contract.mk` — Makefile implementing the contract targets
+- `Makefile` — implements the contract targets below
 - `capabilities` — shell-sourceable file declaring `SUPPORTED_SUITES`
 
 ## Contract Targets
@@ -12,9 +12,11 @@ Each backend lives in `infra/<name>/` and must provide:
 | Target | Purpose |
 |---|---|
 | `setup-infra` | Install prerequisites and dependencies |
-| `deploy-infra` | Provision the lab and cluster |
-| `deploy-osac` | Deploy OSAC, write `.env.infra` |
+| `deploy-infra` | Provision the lab infrastructure |
+| `deploy-ocp` | Deploy an OpenShift cluster |
+| `deploy-osac` | Deploy OSAC on the cluster, write `.env.infra` |
 | `setup-<suite>` | Suite-specific infra prep (can be no-op) |
+| `destroy-ocp` | Tear down the OpenShift cluster |
 | `destroy-osac` | Tear down OSAC only |
 | `destroy-infra` | Tear down everything |
 | `gather-infra` | Collect infrastructure diagnostics |
@@ -35,4 +37,4 @@ The top-level Makefile sources this file before running tests.
 
 ## Variables
 
-Backends receive `EXTRA_VARS` from the top-level Makefile.
+Backends receive `EXTRA_VARS` and `OSAC_DEPLOY_MODE` from the top-level Makefile.
