@@ -17,7 +17,7 @@ inputs:
 
 outputs:
   scan-ok:
-    description: "'false' if the scan did not complete for logs and/or artifacts (fetch/list/download failed, oversize skip, or a post-fetch step like unzip/podman/redact failed) -- do not treat this the same as a clean scan"
+    description: "'false' if the scan did not complete for logs and/or artifacts (fetch/list/download failed, oversize skip, or a post-fetch step like unzip/docker/redact failed) -- do not treat this the same as a clean scan"
     value: ${{ steps.scan.outputs.scan-ok }}
   leaks-found:
     description: "'true' if gitleaks found any secrets in the run's logs or artifacts"
@@ -31,6 +31,9 @@ outputs:
   output-dir:
     description: "Directory with findings.json / status.env / redacted/ (for callers that post summaries or PR comments)"
     value: ${{ steps.scan.outputs.output-dir }}
+  upload-ok:
+    description: "'true' if the redacted-logs evidence artifact uploaded successfully; 'false' when upload failed or was skipped (no leaks)"
+    value: ${{ steps.upload-status.outputs.upload-ok }}
 
 runs:
   using: composite
@@ -50,7 +53,7 @@ runs:
         "${GITHUB_ACTION_PATH}/../../scripts/scan-run-logs.sh" "${RUN_ID}" "${OUTPUT_DIR}"
 
     # always(): scan-run-logs.sh's own EXIT trap guarantees status.env exists
-    # even after a hard failure inside the script (unzip/podman/jq/cp/
+    # even after a hard failure inside the script (unzip/docker/jq/cp/
     # redact.py dying under its `set -e`) -- but only this step actually
     # running is what reads and publishes it. Without always() here, a
     # failure in "Run scanner" above would skip this step entirely via the
@@ -116,6 +119,21 @@ runs:
         # which is easy to miss in job logs.
         if-no-files-found: error
 
+    # Publish upload-ok for callers (PR comments). always(): when upload is
+    # skipped (no leaks) outcome is empty -- surface as false, not unset.
+    - name: Publish upload status
+      id: upload-status
+      if: always()
+      shell: bash
+      env:
+        UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+      run: |
+        if [[ "${UPLOAD_OUTCOME}" == "success" ]]; then
+          echo "upload-ok=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "upload-ok=false" >> "$GITHUB_OUTPUT"
+        fi
+
     # always(): a bare `if: leaks-found == 'true'` implicitly ANDs with
     # success(), so a hard failure in the artifact-upload step above would
     # silently skip the very notification meant to report the leak.
@@ -129,7 +147,10 @@ runs:
         FINDINGS_COUNT: ${{ steps.scan.outputs.findings-count }}
         PURGE_OK: ${{ steps.scan.outputs.purge-ok }}
         OUTPUT_DIR: ${{ steps.scan.outputs.output-dir }}
-        UPLOAD_OK: ${{ steps.upload.outcome == 'success' }}
+        UPLOAD_OK: ${{ steps.upload-status.outputs.upload-ok }}
+        # Artifact lives on *this* scan run (github.run_id), named after the
+        # scanned e2e run (inputs.run-id). Same #artifacts pattern as audit.
+        ARTIFACT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
       run: |
         {
           echo "## :rotating_light: Leaked credential(s) detected in run logs/artifacts"
@@ -153,7 +174,7 @@ runs:
           # if-no-files-found: error), and this step still runs regardless
           # via always().
           if [[ "${UPLOAD_OK}" == "true" ]]; then
-            echo "- A redacted copy is attached as the \`redacted-logs-${RUN_ID}\` artifact for debugging (paths under \`logs/\` and/or \`artifacts/\`)."
+            echo "- Redacted evidence: [\`redacted-logs-${RUN_ID}\`](${ARTIFACT_URL}) (paths under \`logs/\` and/or \`artifacts/\`)."
           else
             echo "- :warning: **Failed to upload the redacted-logs artifact** -- no redacted copy is attached; check the run logs for the upload step's failure."
           fi

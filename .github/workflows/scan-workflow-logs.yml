@@ -42,11 +42,11 @@ permissions: {}
 jobs:
   scan-logs:
     name: Scan and purge run logs
-    # Dedicated label, not the shared `osac-ci` fleet-wide label the e2e jobs
-    # themselves run on: this job needs to run promptly right after each e2e
-    # run to close the credential-exposure window, and sharing a runner pool
-    # with hour-long e2e jobs means it can queue behind them instead.
-    runs-on: osac-ci-small
+    # GitHub-hosted: no queue behind hour-long e2e on osac-ci, and gitleaks
+    # runs via Docker (see scan-run-logs.sh). Slack unmute still needs a
+    # webhook that does not depend on Vault at 127.0.0.1 (self-hosted only);
+    # MUTE_SLACK_ALERTS stays true until that moves to a GitHub secret.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       # Only needed to check out the local composite action definition
@@ -76,7 +76,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          SERVER_URL: ${{ github.server_url }}
           E2E_RUN_ID: ${{ github.event.workflow_run.id }}
           E2E_RUN_URL: ${{ github.event.workflow_run.html_url }}
           E2E_NAME: ${{ github.event.workflow_run.name }}
@@ -86,85 +85,10 @@ jobs:
           PR_FROM_EVENT: ${{ github.event.workflow_run.pull_requests[0].number }}
           FINDINGS_COUNT: ${{ steps.scan.outputs.findings-count }}
           PURGE_OK: ${{ steps.scan.outputs.purge-ok }}
+          UPLOAD_OK: ${{ steps.scan.outputs.upload-ok }}
           OUTPUT_DIR: ${{ steps.scan.outputs.output-dir }}
           SCAN_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-
-          # Resolve exactly one open PR for this e2e head SHA. Paginate the
-          # commit→PRs API so a truncated first page cannot hide siblings.
-          # Event PR number alone is not enough (stale/closed/ambiguous).
-          PR_NUMBER=""
-          # Do not `|| echo '[]'` after jq: with pipefail, gh failure can make
-          # jq already emit [] and then echo append a second [], breaking jq.
-          if ! OPEN_PRS_JSON=$(gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
-            --jq '.[] | select(.state == "open") | .number' 2>/dev/null \
-            | jq -s 'unique'); then
-            echo "::warning::Unable to resolve an open PR for ${HEAD_SHA} (${HEAD_BRANCH}); skipping PR comment."
-            exit 0
-          fi
-          OPEN_PR_COUNT=$(jq 'length' <<<"${OPEN_PRS_JSON}")
-          if [[ "${OPEN_PR_COUNT}" -eq 1 ]]; then
-            PR_NUMBER=$(jq -r '.[0]' <<<"${OPEN_PRS_JSON}")
-          elif [[ "${OPEN_PR_COUNT}" -gt 1 ]]; then
-            echo "Ambiguous: ${OPEN_PR_COUNT} open PRs for ${HEAD_SHA} (${HEAD_BRANCH}) -- skipping PR comment."
-            exit 0
-          else
-            echo "No open PR associated with ${HEAD_SHA} (${HEAD_BRANCH}) -- skipping PR comment."
-            exit 0
-          fi
-          if [[ -n "${PR_FROM_EVENT}" && "${PR_FROM_EVENT}" != "null" \
-            && "${PR_FROM_EVENT}" != "${PR_NUMBER}" ]]; then
-            echo "Note: workflow_run event PR #${PR_FROM_EVENT} differs from unique open PR #${PR_NUMBER} for ${HEAD_SHA}; commenting on #${PR_NUMBER}."
-          fi
-
-          # Escape dynamic text for Markdown/HTML comment bodies. Shared
-          # definition: .github/scripts/md-cell.jq
-          SCRIPTS_DIR="${GITHUB_WORKSPACE}/.github/scripts"
-          md_cell() {
-            # -Rrs: raw input, slurp whole string, raw output (no JSON quotes).
-            printf '%s' "${1}" | jq -Rrs -L "${SCRIPTS_DIR}" 'include "md-cell"; cell'
-          }
-
-          E2E_NAME_SAFE=$(md_cell "${E2E_NAME}")
-
-          BODY_FILE="${RUNNER_TEMP}/pr-leak-comment.md"
-          {
-            echo "### :rotating_light: Credential leak scan found secrets in e2e run logs/artifacts"
-            echo ""
-            echo "**Workflow:** ${E2E_NAME_SAFE}"
-            echo "**E2E run:** [${E2E_RUN_ID}](${E2E_RUN_URL})"
-            echo "**Scan run:** [Scan workflow logs](${SCAN_RUN_URL})"
-            echo "**Findings:** ${FINDINGS_COUNT}"
-            echo ""
-            if [[ "${PURGE_OK}" == "true" ]]; then
-              echo "Tainted raw logs and/or artifacts for that e2e run were deleted to close the exposure window."
-            else
-              echo ":warning: **Purge incomplete** -- raw logs and/or artifacts may still be on GitHub. Check the scan run and delete manually if needed."
-            fi
-            echo ""
-            echo "Rotate any credential(s) below that are real (not test/dev-only values)."
-            echo ""
-            echo "| Rule | File | Line |"
-            echo "|---|---|---|"
-            if [[ -f "${OUTPUT_DIR}/findings.json" ]]; then
-              jq -r -L "${SCRIPTS_DIR}" '
-                include "md-cell";
-                .[] | "| \(.RuleID | cell) | \(.File | cell) | \(.StartLine | cell) |"
-              ' "${OUTPUT_DIR}/findings.json"
-            else
-              echo "| _(findings.json missing)_ | | |"
-            fi
-          } > "${BODY_FILE}"
-
-          # Comment is best-effort -- scan/purge already succeeded; a
-          # transient API error or closed-PR race must not fail the job.
-          if gh pr comment "${PR_NUMBER}" -R "${REPO}" --body-file "${BODY_FILE}"; then
-            echo "Commented on PR #${PR_NUMBER}."
-          else
-            echo "::warning::Failed to comment on PR #${PR_NUMBER} -- leak was still detected; see scan job summary/Slack for purge status."
-          fi
-
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/comment-pr-leak-findings.sh"
       # --- Secret bootstrap (inline — must not run PR-controlled code) ---
       # Fetched only if actually needed for the Slack notification below, so
       # a Vault/AppRole outage can never block the scan/purge above -- that's
@@ -186,8 +110,10 @@ jobs:
           # TEMP (post #262 / OSAC-1684): mute Slack while e2e logs still
           # commonly leak. Scan/purge + PR comments stay enabled (they run
           # before this step). Keep should-alert.value accurate so job
-          # summary / annotations still surface the condition. Set
-          # MUTE_SLACK_ALERTS=false to re-enable Slack.
+          # summary / annotations still surface the condition.
+          # Unmute (MUTE_SLACK_ALERTS=false) only after Slack webhook is a
+          # GitHub Actions secret — AppRole/Vault at 127.0.0.1 does not work
+          # on ubuntu-latest.
           MUTE_SLACK_ALERTS=true
           echo "muted=${MUTE_SLACK_ALERTS}" >> "${GITHUB_OUTPUT}"
           # Alert on cancelled/skipped/missing outputs too -- only a fully

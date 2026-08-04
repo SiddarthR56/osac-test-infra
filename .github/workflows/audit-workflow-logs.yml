@@ -48,9 +48,9 @@ jobs:
     # boundary rather than a cosmetic one. schedule: always runs off the
     # default branch already; this only actually changes workflow_dispatch.
     environment: audit-privileged
-    # Vault is only reachable at 127.0.0.1 from the osac-ci runners
-    # themselves, so this must run there to fetch secrets -- even though the
-    # scan itself needs no cluster access.
+    # Still on osac-ci: audit needs Vault (GH_ORG_TOKEN + Slack path) at
+    # 127.0.0.1. Per-run scan-workflow-logs.yml already moved to ubuntu-latest
+    # + Docker; this job stays until audit secrets move off runner-local Vault.
     runs-on: osac-ci
     permissions:
       # Only needed to check out the shared scripts (scan-run-logs.sh,

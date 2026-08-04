@@ -4,38 +4,51 @@
   # ruleset override, which would silently disable all detection.
   useDefault = true
 
-# No allowlist entries yet. This config is used by
-# .github/actions/scan-and-purge-logs to scan e2e workflow run logs (OSAC-1684).
-# Add regexes here as real false positives are found in practice (e.g. from
-# audit-workflow-logs.yml runs) -- cluster diagnostic output (UIDs, image
-# digests, etc.) is a different shape of text than source code, so the
-# false-positive profile may differ from a source-scanning config.
+# Allowlist for known false positives when scanning e2e workflow run
+# logs/artifacts (OSAC-1684). Typical FP RuleID under default rules is
+# generic-api-key (checksum / X.509 / pvc-as-secret / bare UUID).
 #
-# Sample entries for reference -- uncomment/adapt once a real false positive
-# is confirmed (don't add speculative entries without a concrete example,
-# since an overly broad regex/path here would suppress real leaks too):
+# Do NOT use [[rules]] id="generic-api-key" + [[rules.allowlists]] to
+# "rule-scope" -- with useDefault, redeclaring that id replaces the
+# default rule and disables real generic-api-key detection.
 #
-# [[allowlists]]
-#   description = "Known false positives from scanning e2e run logs"
-#
-#   # Skip specific files/paths entirely (glob or regex), e.g. a log file
-#   # that's expected to contain non-secret high-entropy content.
-#   paths = [
-#     '''cnv/hyperconverged\.yaml''',
-#   ]
-#
-#   # Skip exact matched values, e.g. a fixed dev-only credential that is
-#   # intentionally not a real secret.
-#   regexes = [
-#     '''REPLACE-WITH-THE-EXACT-FALSE-POSITIVE-VALUE''',
-#   ]
-#
-#   # Skip specific commits (rarely needed here since this config scans
-#   # plain log files, not git history).
-#   commits = [
-#     "0000000000000000000000000000000000000000",
-#   ]
-#
-# Note: [[allowlists]] (plural, array-of-tables) is the current syntax as of
-# gitleaks v8.25.0, replacing the deprecated singular [allowlist]. The two
-# cannot be mixed in the same file.
+# Prefer regexTarget=match|secret over line so co-located credentials
+# (jwt / Bearer on the same log line) remain separate findings:
+#   - match: allowlist applies only when the rule's Match text fits
+#   - secret: allowlist applies only when the extracted Secret fits
+#   - line: would drop every finding on that line (rejected for keycloak)
+
+[[allowlists]]
+  description = "K8s checksum-secret(s)-* annotations are SHA1 hashes of secret data, not the secrets (pods-describe / AAP operator logs)"
+  regexTarget = "match"
+  regexes = [
+    # Plain:  checksum-secret-bundle_cacert: deadbeef...
+    # Plural: checksum-secrets-app_credentials.yaml: deadbeef...
+    # JSON:   "checksum-secret-__admin_password_secret":"deadbeef..."
+    '''checksum-secrets?-[A-Za-z0-9_.-]+["\\:=\s]+[0-9a-f]{40}''',
+  ]
+
+[[allowlists]]
+  description = "Public X.509 certificate fingerprints in kernel/ramdisk boot logs (metal3 inspect), not private keys"
+  regexTarget = "match"
+  regexes = [
+    # generic-api-key Match on these lines is often exactly: key: <40hex>'
+    # (trailing quote from the cert string). Anchor ^$ so longer Matches
+    # like secret_key: <hex>' are not allowlisted. Keep Loaded X.509 form too.
+    "Loaded X\\.509 cert '[^']+: [0-9a-f]{40}'",
+    "^key: [0-9a-f]{40}'$",
+  ]
+
+[[allowlists]]
+  description = "Kubernetes PVC names (pvc-<uuid>) when extracted as the Secret"
+  regexTarget = "secret"
+  regexes = [
+    '''^pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''',
+  ]
+
+[[allowlists]]
+  description = "Keycloak / bare UUID identifiers when extracted as the Secret (not line-scoped -- co-located Bearer/JWT must still fire)"
+  regexTarget = "secret"
+  regexes = [
+    '''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''',
+  ]
