@@ -473,17 +473,9 @@ jobs:
 
           echo "Cloning installer at ${CLONE_REF}."
           git init "${INSTALLER_CLONE_DIR}"
-          # Configure "origin" (rather than fetching an anonymous URL) so
-          # that if .gitmodules ever has relative submodule URLs, git
-          # resolves them against this remote instead of falling back to
-          # the local clone-dir path (which isn't the repo's real origin
-          # and would silently break the resolution).
-          git -C "${INSTALLER_CLONE_DIR}" remote add origin "https://github.com/${INSTALLER_REPO}.git"
-          git -C "${INSTALLER_CLONE_DIR}" fetch --depth 1 origin "${CLONE_REF}"
+          git -C "${INSTALLER_CLONE_DIR}" fetch --depth 1 \
+            "https://github.com/${INSTALLER_REPO}.git" "${CLONE_REF}"
           git -C "${INSTALLER_CLONE_DIR}" checkout FETCH_HEAD
-          if [[ -f "${INSTALLER_CLONE_DIR}/.gitmodules" ]]; then
-            git -C "${INSTALLER_CLONE_DIR}" submodule update --init --recursive --depth 1
-          fi
 
           # The actual installer content (Makefile, charts/, values/) lives one
           # level down at osac-installer/ in the monorepo. Detected by directory
