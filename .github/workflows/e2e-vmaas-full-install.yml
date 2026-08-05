@@ -463,22 +463,28 @@ jobs:
           # were built from source earlier in this job, pin to the same
           # commit SHA — the branch may have moved since the component
           # clone, and a second git-clone at the branch name would race.
+          # Otherwise (e.g. nightly builds, which skip component builds),
+          # fall back to INSTALLER_REF, which may itself be a branch name
+          # or a commit SHA (e.g. github.sha from the caller). `git fetch
+          # <ref>` resolves both uniformly; `git clone --branch` does not
+          # accept commit SHAs, only ref names, so it can't be used here.
           INSTALLER_CLONE_DIR="$RUNNER_TEMP/osac-installer-clone"
-          PINNED_SHA=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r '.[0].sha // empty')
-
-          if [[ -n "${PINNED_SHA}" ]]; then
-            echo "Cloning installer at component-resolved commit (${PINNED_SHA})."
-            git init "${INSTALLER_CLONE_DIR}"
-            git -C "${INSTALLER_CLONE_DIR}" fetch --depth 1 \
-              "https://github.com/${INSTALLER_REPO}.git" "${PINNED_SHA}"
-            git -C "${INSTALLER_CLONE_DIR}" checkout FETCH_HEAD
-            if [[ -f "${INSTALLER_CLONE_DIR}/.gitmodules" ]]; then
-              git -C "${INSTALLER_CLONE_DIR}" submodule update --init --recursive --depth 1
-            fi
-          else
-            git clone --recurse-submodules --depth 1 --branch "${INSTALLER_REF}" \
-              "https://github.com/${INSTALLER_REPO}.git" "${INSTALLER_CLONE_DIR}"
+          MATCHING_SHAS=$(echo "${COMPONENT_BUILD_RESULTS:-[]}" | jq -r \
+            --arg repo "${INSTALLER_REPO}" \
+            '[.[] | select(.repo == $repo) | .sha] | unique | .[]')
+          MATCH_COUNT=$(echo "${MATCHING_SHAS}" | grep -c . || true)
+          if [[ "${MATCH_COUNT}" -gt 1 ]]; then
+            echo "::error::Multiple distinct commits built from ${INSTALLER_REPO} in this job's components (${MATCHING_SHAS//$'\n'/, }) -- can't pick one to pin the installer clone to."
+            exit 1
           fi
+          PINNED_SHA="${MATCHING_SHAS}"
+          CLONE_REF="${PINNED_SHA:-${INSTALLER_REF}}"
+
+          echo "Cloning installer at ${CLONE_REF}."
+          git init "${INSTALLER_CLONE_DIR}"
+          git -C "${INSTALLER_CLONE_DIR}" fetch --depth 1 \
+            "https://github.com/${INSTALLER_REPO}.git" "${CLONE_REF}"
+          git -C "${INSTALLER_CLONE_DIR}" checkout FETCH_HEAD
 
           # The actual installer content (Makefile, charts/, values/) lives one
           # level down at osac-installer/ in the monorepo. Detected by directory
