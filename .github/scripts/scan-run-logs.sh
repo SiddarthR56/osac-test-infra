@@ -15,6 +15,7 @@
 # Required env: GH_TOKEN (Actions read to fetch logs/artifacts; write to
 #               delete them)
 # Optional env: GITLEAKS_CONFIG (default: .gitleaks.toml next to this script)
+#               CONTAINER_ENGINE (default: docker if present, else podman)
 #
 # Writes to <output-dir>:
 #   findings.json   sanitized findings (always; "[]" if clean or the scan
@@ -78,11 +79,10 @@ FINDINGS_RAW_JSON="${OUTPUT_DIR}/findings-raw.json"
 STATUS_FILE="${OUTPUT_DIR}/status.env"
 REDACTED_DIR="${OUTPUT_DIR}/redacted"
 
-# chmod 700 on top of umask 077: podman/gitleaks writes findings-raw.json as
+# chmod 700 on top of umask 077: docker/gitleaks writes findings-raw.json as
 # a *container* process, which has its own umask unaffected by this script's
-# -- the directory's own restrictive mode is what actually keeps other
-# users on this (persistent, self-hosted) runner from reading into it,
-# regardless of what mode any individual file inside ends up with.
+# -- the directory's own restrictive mode keeps other users from reading
+# into it on shared runners, regardless of file modes inside.
 mkdir -p "${OUTPUT_DIR}"
 chmod 700 "${OUTPUT_DIR}"
 mkdir -p "${LOGS_DIR}" "${ARTIFACTS_DIR}"
@@ -214,19 +214,49 @@ merge_findings() {
   mv -f -- "${tmp}" "${FINDINGS_RAW_JSON}"
 }
 
+# Pick docker (ubuntu-latest) or podman (osac-ci audit). CONTAINER_ENGINE wins.
+resolve_container_engine() {
+  if [[ -n "${CONTAINER_ENGINE:-}" ]]; then
+    printf '%s\n' "${CONTAINER_ENGINE}"
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    printf '%s\n' docker
+    return 0
+  fi
+  if command -v podman >/dev/null 2>&1; then
+    printf '%s\n' podman
+    return 0
+  fi
+  echo "error: neither docker nor podman found in PATH" >&2
+  return 1
+}
+
+# SELinux :Z on enforcing hosts (osac-ci); omit on GitHub-hosted ubuntu.
+selinux_volume_suffix() {
+  if [[ -r /sys/fs/selinux/enforce ]] && [[ "$(</sys/fs/selinux/enforce)" == "1" ]]; then
+    printf '%s\n' ",Z"
+  else
+    printf '%s\n' ""
+  fi
+}
+
 # Run pinned gitleaks image (--network=none) on scan_dir; write JSON report
 # to report_path (secrets intentionally present for redact.py; never printed).
 run_gitleaks() {
   local scan_dir="$1"
   local report_path="$2"
+  local engine z
+  engine="$(resolve_container_engine)"
+  z="$(selinux_volume_suffix)"
   # Deliberately no --redact/--verbose: this job's own console output must
   # never print the raw secret, but the JSON report needs the real value so
   # redact.py can find-and-replace it. --network=none: raw content stays on
   # this host.
-  podman run --rm --network=none \
-    -v "${scan_dir}:/scan:ro,Z" \
-    -v "${GITLEAKS_CONFIG}:/gitleaks.toml:ro,Z" \
-    -v "$(dirname "${report_path}"):/out:Z" \
+  "${engine}" run --rm --network=none \
+    -v "${scan_dir}:/scan:ro${z}" \
+    -v "${GITLEAKS_CONFIG}:/gitleaks.toml:ro${z}" \
+    -v "$(dirname "${report_path}"):/out${z}" \
     "${GITLEAKS_IMAGE}" dir /scan \
     --config=/gitleaks.toml \
     --report-format=json \
@@ -415,8 +445,8 @@ if (( LOG_LEAK_COUNT > 0 )); then
   log_stage="${OUTPUT_DIR}/.redact-staging-logs"
   rm -rf -- "${log_stage}"
   cp -r "${LOGS_DIR}" "${log_stage}"
-  # Strip the logs/ prefix so File paths match the copied tree; Secret
-  # values are what redact.py uses for replacement.
+  # Strip the logs/ prefix so File paths match the copied tree. redact.py
+  # wipes base64 fields that decode to Secret, plus plaintext/column fallback.
   log_only_report="${OUTPUT_DIR}/findings-raw-logs-only.json"
   jq '[.[] | select(.File | startswith("logs/"))]
       | map(. + {File: (.File | sub("^logs/"; ""))})' \
@@ -454,8 +484,16 @@ fi
 PURGE_PHASE_DONE=true
 
 # Best-effort: mask found secrets in this job's own subsequent log output.
+# Also mask trailing-backslash-stripped variants -- gitleaks sometimes glues
+# JSON escape backslashes onto Secret (same issue redact.py handles).
 while IFS= read -r secret; do
-  [[ -n "${secret}" ]] && echo "::add-mask::${secret}"
+  [[ -z "${secret}" ]] && continue
+  echo "::add-mask::${secret}"
+  stripped="${secret}"
+  while [[ "${stripped}" == *\\ ]]; do
+    stripped="${stripped%\\}"
+    [[ -n "${stripped}" ]] && echo "::add-mask::${stripped}"
+  done
 done < <(jq -r '.[].Secret // empty' "${FINDINGS_RAW_JSON}" | sort -u)
 
 # Sanitize CR/LF in RuleID/File so downstream Markdown tables (PR comment,
