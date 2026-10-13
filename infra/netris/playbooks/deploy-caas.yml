@@ -4,3 +4,6 @@
   gather_facts: false
   roles:
     - create-caas
+  # In cluster-namespace mode, create-caas includes setup-caas-agents
+  # immediately after namespace discovery — before the readiness wait —
+  # so agents are booted before CLUSTER_STATE_READY is expected.
