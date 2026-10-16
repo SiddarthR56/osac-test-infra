@@ -33,9 +33,10 @@ test-bmaas:
 
 OSAC_MONO_DIR ?= /opt/osac
 
+# Do not fail fast: report every networking failure in one CI run.
 test-bmaas-networking test-bmaas_networking:
 	mkdir -p $(REPORTS_DIR)
-	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/regression/networking/ -x -n 0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
+	cd $(OSAC_MONO_DIR) && uv run pytest tests/e2e/bmaas/regression/networking/ -n 0 --maxfail=0 -v --tb=short $(if $(TEST),-k "$(TEST)") --junitxml=$(CURDIR)/$(REPORTS_DIR)/bmaas-networking.xml
 
 test-metering:
 	mkdir -p $(REPORTS_DIR)
